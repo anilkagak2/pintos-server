@@ -38,31 +38,133 @@ process_execute (const char *file_name)
     return TID_ERROR;
   strlcpy (fn_copy, file_name, PGSIZE);
 
+  char **kargv = cmd_token (fn_copy);
+
   /* Create a new thread to execute FILE_NAME. */
-  tid = thread_create (file_name, PRI_DEFAULT, start_process, fn_copy);
+  //tid = thread_create (file_name, PRI_DEFAULT, start_process, fn_copy);
+  tid = thread_create (file_name, PRI_DEFAULT, start_process, kargv);
   if (tid == TID_ERROR)
-    palloc_free_page (fn_copy); 
+    //palloc_free_page (fn_copy); 
+    palloc_free_page (kargv[0]); 
+  else
+    thread_yield ();
+
   return tid;
+}
+
+#define MAX_ARGS 30
+
+/* Breaks the cmdline into tokens & returns the argv-like array. */
+static char **
+cmd_token (char *cmdline)
+{
+  static char *argv[MAX_ARGS];
+  char *saveptr;
+  int i=0;
+
+  argv[i] = strtok_r (cmdline, " " ,&saveptr);
+
+  if (argv[0] == NULL)
+  {
+    PANIC ("commandline given is not valid");
+  }
+
+  else
+  {
+    while (argv[i] != NULL) {
+//	 printf ("argv[%d] %s\n",i,argv[i]);
+	 argv[++i] = strtok_r (NULL," ",&saveptr);
+    }
+  }
+
+  return argv;
 }
 
 /* A thread function that loads a user process and starts it
    running. */
 static void
-start_process (void *file_name_)
+//start_process (void *file_name_)
+start_process (void *kargv)
 {
-  char *file_name = file_name_;
+ // char *file_name = file_name_;
+  ASSERT (is_kernel_vaddr (kargv));
+  char **argv = (char **)kargv;
+  uintptr_t ptr = vtop (kargv);
   struct intr_frame if_;
   bool success;
+
 
   /* Initialize interrupt frame and load executable. */
   memset (&if_, 0, sizeof if_);
   if_.gs = if_.fs = if_.es = if_.ds = if_.ss = SEL_UDSEG;
   if_.cs = SEL_UCSEG;
   if_.eflags = FLAG_IF | FLAG_MBS;
-  success = load (file_name, &if_.eip, &if_.esp);
+
+  static int argc = 0;
+  while (argv[argc] != NULL)
+	argc++;
+
+//  success = load (file_name, &if_.eip, &if_.esp);
+  success = load (argv[0], &if_.eip, &if_.esp);
+
+  if (success) {
+        int i = argc - 1;
+        int count = 0;
+        size_t ptr_size = sizeof (char *);
+	uint32_t offset[MAX_ARGS];
+
+/*
+	// argv[argc] = NULL
+        if_.esp -= ptr_size;
+	//*(char **)(if_.esp) = 0;
+	//*(char **)(if_.esp) = NULL;
+	*(char *)(if_.esp) = NULL;
+        count += ptr_size;
+	offset[argc] = if_.esp;
+*/
+	// argv[argc-1] --> argv[0]
+	// may be need to look till strlen(argv[i]) +1
+	for (;i >= 0; i--) {
+                if_.esp -= strlen (argv[i]) + 1;
+                memcpy (if_.esp,argv[i], strlen (argv[i]) + 1);
+                count += strlen (argv[i]) + 1;
+		offset[i] = if_.esp;
+        }
+
+        // word align the stack pointer
+        if ( ((uint32_t)if_.esp % 4) != 0) {
+		int decrease = ((uint32_t)if_.esp % 4);
+	// i have to keep track of the offset till argv[0] & not the alignment
+                count += decrease;
+                if_.esp -= decrease;
+        }
+
+	// argv[argc] = NULL
+        if_.esp -= ptr_size;
+        *(char **)(if_.esp) = NULL;
+
+	// place the pointers to the argv's on the stack
+	i = argc - 1;
+	for (;i >= 0; i--) {
+                if_.esp -= ptr_size;
+                *(char **)(if_.esp) = offset[i];
+        }
+
+        if_.esp -= ptr_size;
+        *(char **)if_.esp = if_.esp + ptr_size;             // argv
+
+        if_.esp -= ptr_size;
+        *(int *)if_.esp = argc;               // argc
+
+        if_.esp -= ptr_size;
+        *(int **)if_.esp = 0;             // fake return address 
+//        if_.esp -= ptr_size;
+
+  }
 
   /* If load failed, quit. */
-  palloc_free_page (file_name);
+  //palloc_free_page (file_name);
+  palloc_free_page (argv[0]);
   if (!success) 
     thread_exit ();
 
@@ -86,8 +188,40 @@ start_process (void *file_name_)
    This function will be implemented in problem 2-2.  For now, it
    does nothing. */
 int
-process_wait (tid_t child_tid UNUSED) 
+//process_wait (tid_t child_tid UNUSED) 
+process_wait (tid_t child_tid) 
 {
+  // search for the thread with tid_t child_tid, if not found return -1
+  // or keep on waiting for it, till it is in the all_list 
+  /*struct list_elem *e;
+  bool childFound = false;
+
+  while (1) {
+
+     childFound = false;
+
+    enum intr_level old_level = intr_disable ();
+
+//    uintptr_t all_list_u = vtop (&all_list);
+    // traverse the all_list for the thread child_tid
+    for (e = list_begin (&all_list); e != list_end (&all_list); e = list_next (&all_list)) {
+      struct thread *t = list_entry (e, struct thread, allelem);
+      if (t->tid == child_tid) {
+        childFound = true;
+        break;
+      }
+    }
+   intr_set_level (old_level);
+
+   if (childFound)
+	thread_yield ();
+
+   // need to know what was the return status of the child
+   else return 1;
+  }
+*/
+
+//  while (1) {}
   return -1;
 }
 
@@ -207,6 +341,7 @@ static bool load_segment (struct file *file, off_t ofs, uint8_t *upage,
    Returns true if successful, false otherwise. */
 bool
 load (const char *file_name, void (**eip) (void), void **esp) 
+//load (char **kargv,int *kargc, void (**eip) (void), void **esp) 
 {
   struct thread *t = thread_current ();
   struct Elf32_Ehdr ehdr;
@@ -214,6 +349,8 @@ load (const char *file_name, void (**eip) (void), void **esp)
   off_t file_ofs;
   bool success = false;
   int i;
+
+//  char *file_name = kargv[0];
 
   /* Allocate and activate page directory. */
   t->pagedir = pagedir_create ();

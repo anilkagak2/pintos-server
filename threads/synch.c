@@ -357,7 +357,10 @@ lock_release (struct lock *lock)
 //    thread_set_priority (t->priority);
 //   struct thread *next = list_entry (list_begin (&ready_list), struct thread, elem);
 //   if (t->priority < next->priority)
+#ifndef USERPROG
 	thread_yield ();
+#endif
+
    }
 
   // sema->value++;
