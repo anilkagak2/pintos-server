@@ -97,6 +97,9 @@ thread_init (void)
   list_init (&ready_list);
   list_init (&all_list);
 
+// initialize the lock for filesystem access
+  lock_init (&filesys_lock);
+
   /* Set up a thread structure for the running thread. */
   initial_thread = running_thread ();
   init_thread (initial_thread, "main", PRI_DEFAULT);
@@ -559,12 +562,16 @@ init_thread (struct thread *t, const char *name, int priority)
   t->magic = THREAD_MAGIC;
   t->lock_waiting_on = NULL;
 
-  // you could bring the sema's initialization in here
-  // instead of doing it in start_process ()
 #ifdef USERPROG
   sema_init (&t->child_sema,0);
   sema_init (&t->parent_sema,0);
   list_init (&t->children);
+  list_init (&t->fd_list);
+
+  // STDIN 0, STDOUT 1
+  t->fd_to_allot = 2;
+
+  // may be add STDIN & STDOUT to this fd list
 
   // if the current thread is not the main thread, then insert it's list_elem
   // in it's parent's children list

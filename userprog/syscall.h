@@ -7,4 +7,6 @@ void syscall_init (void);
 bool is_ptr_valid (void *);
 void check_pointer (void *);
 
+void exit_handler (int);
+
 #endif /* userprog/syscall.h */

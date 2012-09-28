@@ -7,6 +7,8 @@
 
 #include "synch.h"
 
+#include <filesystem/file.h>
+
 /* States in a thread's life cycle. */
 enum thread_status
   {
@@ -15,6 +17,14 @@ enum thread_status
     THREAD_BLOCKED,     /* Waiting for an event to trigger. */
     THREAD_DYING        /* About to be destroyed. */
   };
+
+// structure for the file descriptor
+struct file_descriptor {
+  struct file *fp;		/* File structure. */
+  int fd;			/* File Descriptor. */
+  struct list_elem elem;	/* Element for inserting this into thread's
+				descriptor list. */
+};
 
 /* Thread identifier type.
    You can redefine this to whatever type you like. */
@@ -111,6 +121,8 @@ struct thread
     struct list children;		/* List of all the children's of the thread. */
     struct list_elem child_elem;	/* To insert in the parent's children list. */
     struct thread *parent;		/* Parent's thread pointer. */
+    struct list fd_list;		/* List of file descriptors of thread. */
+    int fd_to_allot;			/* File descriptor number to be allotted. */
 #endif
 
     /* Owned by thread.c. */
@@ -125,6 +137,9 @@ extern bool thread_mlfqs;
 /* List of all processes.  Processes are added to this list
    when they are first scheduled and removed when they exit. */
 static struct list all_list;
+
+// lock for accessing the filesystem code
+static struct lock filesys_lock;
 
 void thread_init (void);
 void thread_start (void);
