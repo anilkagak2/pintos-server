@@ -1,0 +1,269 @@
+--	DATA STRUCTURES
+used the inbuilt list datastructure for implementing the sleep_list
+list is a doubly linked list available at <lib/kernel/list.h>
+	- Used in implementing sleep_list in "timer.c"
+
+## thread.h
+ changed the 'struct thread' structure
+ - used when process wants to sleep
+    int64_t sleep_start;                /* Start of the sleep for the thread. */
+    int64_t sleep_time;                 /* Total time to sleep. */
+
+ - base priority assigned to the thread in thread_create ().
+	It can be changed by calling thread_set_priority ().
+   int base_priority;                  /* Base Priority. */
+
+ - used in priority-donation (nesting cases too)
+ - a thread can wait on a single lock at a time
+    struct lock *lock_waiting_on;       /* Lock on which the thread is waiting. */
+    struct list locks_holding;          /* List of all the locks which the thread is holding. */
+
+## synch.h
+ changed the 'struct lock'
+ added following list_elem variables, allelem will be in the list of all locks (all_locks)
+	struct list_elem elem;      /* List element for locks, in waiters. */
+	struct list_elem allelem;   /* List element for all_locks list. */
+
+## sync.c
+	- added a priority variable in semaphore_elem
+		int priority;                       /* Priority of this thread. */
+
+--	Functions Added
+ - thread.h
+
+	/* Returns True if priority of thread(t1) > priority of thread(t2), otherwise False. */
+	/* used in insertion in the ready_list. */
+	bool less_priority (const struct list_elem *a, const struct list_elem *b, void *aux);
+
+	/* Returns True if priority of thread(t1) < priority of thread(t2), otherwise False. */
+	/* When finding the maximum element this function is used */
+	bool more_priority (const struct list_elem *a, const struct list_elem *b, void *aux);
+
+	/* Returns True if sleep time left for t1 is less than that of t2. */
+	bool less_sleep_time (const struct list_elem *a, const struct list_elem *b, void *aux);
+	void donate_priority (struct thread *t, int priority);
+
+ - synch.c 
+
+	/* Returns True if the priority of the lock l1's waiter is less than that of lock l2. */
+	bool more_priority_lock (const struct list_elem *a, const struct list_elem *b, void *aux);
+	struct list all_locks;  /* List of all the locks.  */
+
+	/* Returns True if priority of e1 > e2, otherwise False.
+	bool cond_less_priority (const struct list_elem *a, const struct list_elem *b, void *aux)
+
+--	Functions Changed
+
+## removing busy wait in timer_sleep
+## timer.c
+void
+timer_init (void)
+	- Initialized the sleep_list here.
+	list_init (&sleep_list);
+
+
+void
+timer_sleep (int64_t ticks)
+	- if ticks <=0 return
+	- else
+		initiliaze the sleep_time & sleep_start &
+		add thread to sleep_list with maintaining the order in which to wakeup threads
+		then block this thread
+			t->sleep_time = ticks;
+			t->sleep_start = timer_ticks ();
+			list_insert_ordered (&sleep_list, &t->elem,less_sleep_time,NULL);
+
+
+static void
+timer_interrupt (struct intr_frame *args UNUSED)
+	- sleep_list contains the list with increasing wakeup time
+		so wakeup threads starting from front till the occurrence of a +ve wakeup time.
+		delete the woken up thread from sleep_list & unblock the thread.
+
+
+## Priority-Scheduling
+## thread.c
+void
+thread_init (void)
+	list_init (&all_locks);                       // initialize the list of all locks
+
+
+void
+thread_unblock (struct thread *t)
+	- unblocks the thread t & inserts t in the ready_list with maintaining the priority
+		less_priority () is used in defining the less priority function.
+		a thread with higher priority will be at the front in the list
+			list_insert_ordered (&ready_list, &t->elem, less_priority, NULL);
+
+	- current thread yields if the unblocked thread has higher priority
+		so yield if the current thread is a low priority as compared to the unblocked thread
+
+		if ((thread_current ()->priority < t->priority) && thread_current () != idle_thread)
+		  {
+		        if (intr_context ())
+		                intr_yield_on_return ();
+		        else
+                		thread_yield ();
+		  }
+
+
+
+void
+thread_yield (void)
+	- adds the current thread to the ready_list with higher priority at front in the list
+		list_insert_ordered (&ready_list, &cur->elem, less_priority, NULL);
+
+void
+thread_set_priority (int new_priority)
+	- sets the base priority as new_priority
+		t->base_priority = new_priority;
+
+	- if the thread is holding some lock & it's priority != base_priority
+		so that means you cannot lower your priority as some high priority thread is waiting for that lock
+		set the thread's priority only if it doesn't hold any lock or if new_priority > t->priority
+
+		if (list_empty (&thread_current ()->locks_holding) || (new_priority > t->priority))
+			t->priority =  new_priority;
+
+	- if the new priority given to thread is less than the priority of the front thread
+		of ready_list, yield the CPU
+		struct thread *next = list_entry (list_begin (&ready_list), struct thread, elem);
+		if (t->priority < next->priority)
+		        thread_yield ();
+
+	- since this function is accessing ready_list it needs to disable the interrupts for that time
+
+
+void
+donate_priority (struct thread *t, int priority)
+	- Increases the priority of thread t, if current priority is less than this.
+		Also checks for donation in the thread's list of locks, as it may be the case
+		of nested donation
+
+		if (t->priority < priority)
+		{
+		        t->priority = priority;
+
+			/* what happens when thread is in the ready list.
+			   You need to place the element at correct place so as to maintain
+			   ready Q as priority q. */
+
+		        if (t->status == THREAD_READY)
+        		{
+                		list_sort (&ready_list,less_priority,NULL);
+		        }
+
+		        // if thread t is waiting on some other lock, donate priority to that thread
+		       if (t->lock_waiting_on)
+                		donate_priority (t->lock_waiting_on->holder, priority);
+		}
+
+static void
+init_thread (struct thread *t, const char *name, int priority)
+	t->base_priority = priority;
+	t->lock_waiting_on = NULL;
+	list_init (&t->locks_waiting_on);
+	list_init (&t->locks_holding);
+
+## synch.c
+
+void
+sema_down (struct semaphore *sema)
+	- inserting the thread in the waiters list according to the priority of the thread
+		list_insert_ordered (&sema->waiters, &t->elem, less_priority, NULL);
+
+void
+sema_up (struct semaphore *sema)
+	- increamenting the value of the semaphore before unblocking any waiters
+		as thread_unblock () can now preempt the calling thread & schedule the waiter
+			 sema->value++;
+
+	- unblocking the thread with maximum priority in the list of waiters
+		picking up maximum priority thread (as donate_priority to that thread may increase it's priority 
+		& the list will not be sorted then)
+
+		struct list_elem *to_remove = list_max (&sema->waiters, more_priority, NULL);
+		list_remove (to_remove);
+		thread_unblock (list_entry (to_remove, struct thread, elem));
+
+void
+lock_acquire (struct lock *lock)
+	- before checking the value od lock's semaphore, initialize the value of 
+		thread's lock_waiting_on as current lock & when thread gets the lock make it NULL
+		(because may be the thread gets blocked & added to the list of waiters of the lock's semaphore)
+	- in case the sema's value is 0, insert the thread to sema's waiters with priority taken into account &
+		donate_priority from this thread to the thread who is holding the lock
+
+		t->lock_waiting_on = lock;
+		while (sema->value == 0)
+		{
+			list_insert_ordered (&sema->waiters, &t->elem, less_priority, NULL);
+			donate_priority (lock->holder, t->priority);
+			 thread_block ();
+		}
+
+		list_push_front (&t->locks_holding, &lock->elem);
+		t->lock_waiting_on = NULL;
+		sema->value--;
+		lock->holder = t;
+		
+
+void
+lock_release (struct lock *lock)
+	- thread_unblock () call may call yield () & in that case if you increase the semaphore's value later
+		   waiter will not be able to occupy the semaphore.
+		  sema->value++;
+
+	- remove this lock from thread's lock_holding list
+		  list_remove (&lock->elem);
+
+	- if current thread got the donation from some waiter, then it need to return to the priority which 
+		was assigned before acquiring this lock
+		set the priority to be the maximum of {maximum priority among waiters in locks_list & base_priority}
+
+		if (t->priority != t->base_priority)
+		{
+			// pick up the next lock in lock_holding with maximum waiter's priority
+ 			if (list_empty (&t->locks_holding))
+			        t->priority = t->base_priority;
+
+			// thread still holds some locks
+			else
+			{
+			      struct thread *next_priority_assigner;
+			      struct lock *highest_priority_lock = list_entry (list_max (&t->locks_holding, more_priority_lock, NULL), struct lock, elem);
+			      next_priority_assigner = list_entry (list_begin (&(highest_priority_lock->semaphore.waiters)), struct thread, elem);
+
+			      // if the thread's base priority is less than next_priority_assigner's priority, assume that to be a donation
+			      if (t->base_priority < next_priority_assigner->priority)
+			                t->priority = next_priority_assigner->priority;
+
+			      else
+			                t->priority = t->base_priority;
+    			}
+  		}
+
+	- if any waiter is waiting on the lock, pick the maximum priority one from them & unblock it
+
+		if (!list_empty (&sema->waiters))
+		{
+			thread_unblock (list_entry (list_pop_front (&sema->waiters), struct thread, elem));
+		}
+
+	- this thread's priority may restore to the base priority, so call thread_yield ()
+		will yield the CPU if next thread in readyQ is having more priority, otherwise no context switch happens
+
+		else thread_yield ();
+
+
+void
+cond_wait (struct condition *cond, struct lock *lock)
+	- semaphore_elem has a priority variable which helps in inserting the waiters the 
+		waiter's list of condition variable, so that the highest priority waiter is in the front of the list
+
+		waiter.priority = thread_current ()->priority;
+		list_insert_ordered (&cond->waiters, &waiter.elem, cond_less_priority, NULL);
+
+
+
+--
