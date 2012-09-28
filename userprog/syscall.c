@@ -11,6 +11,8 @@ static void syscall_handler (struct intr_frame *);
 //void check_pointer (void *ptr);
 
 void exit_handler (int ret_value);
+int open_handler (const char *file);
+
 struct file * search_fd_list (int fd);
 struct file_descriptor *give_fdescriptor (int fd);
 
@@ -59,29 +61,10 @@ syscall_handler (struct intr_frame *f)
   // get the struct thread for calling process
   struct thread *t = thread_current ();
 
-  // may be required to handle the page fault
-//  ASSERT (is_ptr_valid (user_esp));
-/*  if (!is_ptr_valid (user_esp)) {
-	printf ("%s: exit(%d)\n",t->name, -1);
-	thread_exit ();
-  }*/
-//  check_pointer (user_esp);
   uint32_t syscall_no = *user_esp;
 
   // pop the value off the stack
   user_esp++;
-
-  // is it really required ??
-  //ASSERT (is_user_vaddr (user_esp));
-/*  if (!is_ptr_valid (user_esp)) {
-	printf ("%s: exit(%d)\n",t->name, -1);
-	thread_exit ();
-  }*/
- // check_pointer (user_esp);
-
-  // updating the stack pointer in the kernel stack
-  //*(int **)(f->esp) = user_esp;
-//  f->esp = user_esp;
 
   switch (syscall_no) {
     case SYS_HALT:
@@ -97,30 +80,11 @@ syscall_handler (struct intr_frame *f)
   	user_esp++;
 
 	exit_handler (ret_value);
-/*	printf ("%s: exit(%d)\n",t->name, ret_value);
-
-	t->ret_value = ret_value;
-	f->eax = ret_value;
-	// calling sema_up may wake up the main process
-	// waiting in process_wait, you need to synchronize it
-	// up your parent_semaphore 
-	sema_up (&t->parent_sema);
-
-	// now wait till the parent process get's the exit value
-	// wait on parent's child semaphore
-	sema_down (&t->parent->child_sema);
-
-	thread_exit (); */
 	break;
 	}
 
     case SYS_EXEC: {
 	/* Start another process. */
-//	ASSERT (is_ptr_valid (user_esp));
-/* 	if (!is_ptr_valid (user_esp)) {
-	  printf ("%s: exit(%d)\n",t->name, -1);
-	  thread_exit ();
-	}*/
 	check_pointer (user_esp);
 	const char *cmd_line = *user_esp;
 	user_esp++;
@@ -134,11 +98,6 @@ syscall_handler (struct intr_frame *f)
 
     case SYS_WAIT: {
 	/* Wait for a child process to die. */
-//	ASSERT (is_ptr_valid (user_esp));
-/*	if (!is_ptr_valid (user_esp)) {
-	  printf ("%s: exit(%d)\n",t->name, -1);
-	  thread_exit ();
-	}*/
 	check_pointer (user_esp);
 	tid_t child_tid = *user_esp;
 	user_esp++;
@@ -150,7 +109,6 @@ syscall_handler (struct intr_frame *f)
 
     case SYS_CREATE: {
 	/* Create a file. */
-	//printf ("Create is called\n");
 	check_pointer (user_esp);
 	const char *file_name = *user_esp;
 	user_esp++;
@@ -197,7 +155,7 @@ syscall_handler (struct intr_frame *f)
 	
 	check_pointer (file_name);
 
-	// it's a critical section : accessing filesystem code
+/*	// it's a critical section : accessing filesystem code
 //	lock_acquire (&filesys_lock);
 	struct file *fp = filesys_open (file_name);
 //	lock_release (&filesys_lock);
@@ -209,13 +167,6 @@ syscall_handler (struct intr_frame *f)
 
 	// need to give it a thought
 	else {
-		// will this be different on different invocations of this 
-		// open () call
-//		static struct file_descriptor fd;
-//		fd.fp = fp;
-//		list_insert (&thread_current ()->fd_list, &(fd.elem));
-//		f->eax = (int)(&fd);
-//		f->eax = (int)(fp);
 		struct file_descriptor *fdptr = (struct file_descriptor *)malloc(sizeof(struct file_descriptor));
 
 		if(!fdptr) {
@@ -234,7 +185,8 @@ syscall_handler (struct intr_frame *f)
 			f->eax = fdptr->fd;
 		}
 	}
-
+*/
+	f->eax = open_handler (file_name);
 	break;
 	}
 
@@ -391,6 +343,7 @@ syscall_handler (struct intr_frame *f)
 	}
 
 	else {
+		file_close (fdptr->fp);
 		f->eax = list_remove (&fdptr->elem);
 		free (fdptr);
 	}
@@ -408,15 +361,8 @@ void exit_handler (int ret_value) {
 	printf ("%s: exit(%d)\n",t->name, ret_value);
 
 	t->ret_value = ret_value;
-	// calling sema_up may wake up the main process
-	// waiting in process_wait, you need to synchronize it
-	// up your parent_semaphore 
-	sema_up (&t->parent_sema);
 
-	// now wait till the parent process get's the exit value
-	// wait on parent's child semaphore
-	sema_down (&t->parent->child_sema);
-
+	// free the file descriptors so that parent can write on it
 	// free the memory used by the file descriptor structures
 	struct list *fd_list = &t->fd_list;
 	struct list_elem *e;
@@ -428,7 +374,56 @@ void exit_handler (int ret_value) {
 		free (fdptr);
 	}
 
+	// calling sema_up may wake up the main process
+	// waiting in process_wait, you need to synchronize it
+	// up your parent_semaphore 
+	sema_up (&t->parent_sema);
+
+	// now wait till the parent process get's the exit value
+	// wait on parent's child semaphore
+	sema_down (&t->parent->child_sema);
+
 	thread_exit ();
+}
+
+// helper function for the open system call
+int open_handler (const char *file_name)
+{
+  // it's a critical section : accessing filesystem code
+  //lock_acquire (&filesys_lock);
+  struct file *fp = filesys_open (file_name);
+  //lock_release (&filesys_lock);
+
+  struct thread *t = thread_current ();
+
+  // could not open the file
+  if (!fp) return -1;
+  	//f->eax = -1;
+
+  else
+  {
+    struct file_descriptor *fdptr = (struct file_descriptor *)malloc(sizeof(struct file_descriptor));
+
+    if(!fdptr) 
+    {
+	printf ("Cannot allocate memory to file descriptor pointer\n");
+	file_close (fp);
+//	f->eax = -1;
+	return -1;
+    }	
+
+    else
+    {
+	fdptr->fp = fp;
+	fdptr->fd = t->fd_to_allot++;
+
+	// it's a fault to use list_insert here (Why??)
+	//list_insert (&t->fd_list, &fdptr->elem);
+	list_push_back (&t->fd_list, &fdptr->elem);
+	//f->eax = fdptr->fd;
+	return fdptr->fd;
+    }
+  }
 }
 
 // searches the thread's fd_list for the presence of 

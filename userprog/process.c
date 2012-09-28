@@ -159,6 +159,17 @@ start_process (void *kargv)
   struct semaphore *sema = (struct semaphore *)argv[argc];
   argv[argc] = NULL;
 
+  // open process's executable & call file_deny_write () on it
+  int fd_exe = open_handler (argv[0]);
+/*  if (fd_exe == -1) {
+    printf ("Couldn't open the executable for denying writes on it\n");
+  }
+*/
+  if (fd_exe != -1) {
+    struct file *fp = search_fd_list (fd_exe);
+    file_deny_write (fp); 
+  }
+
 //  success = load (file_name, &if_.eip, &if_.esp);
   success = load (argv[0], &if_.eip, &if_.esp);
 
