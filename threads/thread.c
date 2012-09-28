@@ -91,7 +91,7 @@ void
 thread_init (void) 
 {
   ASSERT (intr_get_level () == INTR_OFF);
-
+// do u really need this
   list_init (&all_locks);			// initialize the list of all locks
   lock_init (&tid_lock);
   list_init (&ready_list);
@@ -558,6 +558,25 @@ init_thread (struct thread *t, const char *name, int priority)
   t->base_priority = priority;
   t->magic = THREAD_MAGIC;
   t->lock_waiting_on = NULL;
+
+  // you could bring the sema's initialization in here
+  // instead of doing it in start_process ()
+#ifdef USERPROG
+  sema_init (&t->child_sema,0);
+  sema_init (&t->parent_sema,0);
+  list_init (&t->children);
+
+  // if the current thread is not the main thread, then insert it's list_elem
+  // in it's parent's children list
+  if (t != initial_thread)
+  {
+    list_push_back (&thread_current ()->children, &t->child_elem);
+    t->parent = thread_current ();
+  }
+  else t->parent = NULL;
+
+#endif
+
 //  list_init (&t->locks_waiting_on);
   list_init (&t->locks_holding);
   list_push_back (&all_list, &t->allelem);

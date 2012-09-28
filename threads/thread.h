@@ -106,7 +106,11 @@ struct thread
     uint32_t *pagedir;                  /* Page directory. */
 
     int ret_value;			/* Return value for the thread. */
-    struct semaphore sema;		/* Semaphore for synchronization with process_wait. */
+    struct semaphore child_sema;	/* Semaphore for synchronization with process_wait for children. */
+    struct semaphore parent_sema;	/* Parent tries to down this semaphore for wait syscall. */
+    struct list children;		/* List of all the children's of the thread. */
+    struct list_elem child_elem;	/* To insert in the parent's children list. */
+    struct thread *parent;		/* Parent's thread pointer. */
 #endif
 
     /* Owned by thread.c. */

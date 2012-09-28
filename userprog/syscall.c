@@ -1,11 +1,16 @@
 #include "userprog/syscall.h"
 #include <stdio.h>
 #include <syscall-nr.h>
+#include <syscall.h>
+//#include "tests/lib.h"
 #include "threads/interrupt.h"
 #include "threads/thread.h"
 #include "threads/vaddr.h"
 
 static void syscall_handler (struct intr_frame *);
+//void check_pointer (void *ptr);
+
+void exit_handler (int ret_value);
 
 void
 syscall_init (void) 
@@ -16,8 +21,23 @@ syscall_init (void)
 // checks the validity of user provided addresses
 bool is_ptr_valid (void *ptr)
 {
-  return (ptr != NULL && is_user_vaddr (ptr) && 
-		pagedir_get_page (thread_current ()->pagedir, ptr));
+  if (ptr == NULL) return false;
+  else if (!is_user_vaddr (ptr)) return false;
+  else if (!pagedir_get_page (thread_current ()->pagedir, ptr)) return false;
+  else return true;
+
+//  return (ptr != NULL && is_user_vaddr (ptr) && 
+//		pagedir_get_page (thread_current ()->pagedir, ptr));
+}
+
+void check_pointer (void *ptr)
+{
+  if (!is_ptr_valid (ptr)) {
+//    printf ("%s: exit(%d)\n",thread_current ()->name, -1);
+//    thread_exit ();
+//      exit (-1);
+     exit_handler (-1);
+  }
 }
 
 static void
@@ -29,17 +49,33 @@ syscall_handler (struct intr_frame *f)
   uint32_t *user_esp = f->esp;
   size_t size_int = sizeof (int *);
 
-  // may be required to handle the page fault
-  ASSERT (is_ptr_valid (user_esp));
+  // check for the validity of the Stack Pointer
+  // before calling anything because the thread_current ()
+  // rounds down the value of esp to guess the struct thread *
+  check_pointer (user_esp);
 
   // get the struct thread for calling process
   struct thread *t = thread_current ();
 
+  // may be required to handle the page fault
+//  ASSERT (is_ptr_valid (user_esp));
+/*  if (!is_ptr_valid (user_esp)) {
+	printf ("%s: exit(%d)\n",t->name, -1);
+	thread_exit ();
+  }*/
+//  check_pointer (user_esp);
   uint32_t syscall_no = *user_esp;
 
   // pop the value off the stack
   user_esp++;
-  ASSERT (is_user_vaddr (user_esp));
+
+  // is it really required ??
+  //ASSERT (is_user_vaddr (user_esp));
+/*  if (!is_ptr_valid (user_esp)) {
+	printf ("%s: exit(%d)\n",t->name, -1);
+	thread_exit ();
+  }*/
+ // check_pointer (user_esp);
 
   // updating the stack pointer in the kernel stack
   //*(int **)(f->esp) = user_esp;
@@ -53,63 +89,82 @@ syscall_handler (struct intr_frame *f)
 	break;
 
     case SYS_EXIT: {
-	//printf ("Exit is called\n");
 	/* Terminate this process. */
-
+	check_pointer (user_esp);
 	uint32_t ret_value = *user_esp;
   	user_esp++;
 
-	ASSERT (is_ptr_valid (user_esp));
-
-	// not required as the syscall infrastructure does this for you
-	// updating the stack pointer in the kernel stack
-//	f->esp = user_esp;
+	exit_handler (ret_value);
+/*	printf ("%s: exit(%d)\n",t->name, ret_value);
 
 	t->ret_value = ret_value;
 	f->eax = ret_value;
 	// calling sema_up may wake up the main process
 	// waiting in process_wait, you need to synchronize it
-//	sema_up (&t->sema);
+	// up your parent_semaphore 
+	sema_up (&t->parent_sema);
 
-	// destroy the pagedir of thread t
-//	uint32_t *pd;
+	// now wait till the parent process get's the exit value
+	// wait on parent's child semaphore
+	sema_down (&t->parent->child_sema);
 
-	/* Destroy the current process's page directory and switch back
-	     to the kernel-only page directory. */
-//	pd = t->pagedir;
-//	if (pd != NULL) 
-//	{
-	      /* Correct ordering here is crucial.  We must set
-        	 cur->pagedir to NULL before switching page directories,
-	         so that a timer interrupt can't switch back to the
-	         process page directory.  We must activate the base page
-	         directory before destroying the process's page
-        	 directory, or our active page directory will be one
-	         that's been freed (and cleared). */
-/*	      t->pagedir = NULL;
-	      pagedir_activate (NULL);
-	      pagedir_destroy (pd);
-	}
-*/	// need to implement the thread_exit () 
-
-	thread_exit ();
+	thread_exit (); */
 	break;
 	}
 
-    case SYS_EXEC:
+    case SYS_EXEC: {
 	/* Start another process. */
-	printf ("Exec is called\n");
-	break;
+//	ASSERT (is_ptr_valid (user_esp));
+/* 	if (!is_ptr_valid (user_esp)) {
+	  printf ("%s: exit(%d)\n",t->name, -1);
+	  thread_exit ();
+	}*/
+	check_pointer (user_esp);
+	const char *cmd_line = *user_esp;
+	user_esp++;
 
-    case SYS_WAIT:
+	if (is_ptr_valid (cmd_line))
+		f->eax = process_execute (cmd_line);
+	else f->eax = -1;
+
+	break;
+	}
+
+    case SYS_WAIT: {
 	/* Wait for a child process to die. */
-	printf ("Wait is called\n");
-	break;
+//	ASSERT (is_ptr_valid (user_esp));
+/*	if (!is_ptr_valid (user_esp)) {
+	  printf ("%s: exit(%d)\n",t->name, -1);
+	  thread_exit ();
+	}*/
+	check_pointer (user_esp);
+	tid_t child_tid = *user_esp;
+	user_esp++;
 
-    case SYS_CREATE:
-	/* Create a file. */
-	printf ("Create is called\n");
+	f->eax = process_wait (child_tid);
+
 	break;
+	}
+
+    case SYS_CREATE: {
+	/* Create a file. */
+	//printf ("Create is called\n");
+	check_pointer (user_esp);
+	const char *file_name = *user_esp;
+	user_esp++;
+	
+	check_pointer (user_esp);
+	size_t initial_size = *user_esp;
+	user_esp++;
+
+	//if (is_ptr_valid (file_name))
+	check_pointer (file_name);
+//	if (is_ptr_valid (file_name))
+		f->eax = filesys_create (file_name, initial_size);
+//	else f->eax = -1;
+
+	break;
+	}
 
     case SYS_REMOVE:
 	/* Delete a file. */
@@ -134,18 +189,29 @@ syscall_handler (struct intr_frame *f)
     case SYS_WRITE: {
 	/* Write to a file. */
 	//printf ("Write is called\n");
-
+	check_pointer (user_esp);
 	uint32_t file_desc = *user_esp;
 	user_esp++;
-	ASSERT (is_ptr_valid (user_esp));
 
+//	ASSERT (is_ptr_valid (user_esp));
+/*	if (!is_ptr_valid (user_esp)) {
+	  printf ("%s: exit(%d)\n",t->name, -1);
+	  thread_exit ();
+	}*/
+	check_pointer (user_esp);
 	char *buf = *user_esp;
 	user_esp++;
-	ASSERT (is_ptr_valid (user_esp));
 
+//	ASSERT (is_ptr_valid (user_esp));
+/*	if (!is_ptr_valid (user_esp)) {
+	  printf ("%s: exit(%d)\n",t->name, -1);
+	  thread_exit ();
+	}*/
+	check_pointer (user_esp);
 	uint32_t len = *user_esp;
 	user_esp++;
-	ASSERT (is_ptr_valid (user_esp));
+
+//	ASSERT (is_ptr_valid (user_esp));
 
 	// updating the stack pointer in the kernel stack
 //	f->esp = user_esp;
@@ -175,5 +241,28 @@ syscall_handler (struct intr_frame *f)
 
   }
 
-//  thread_exit ();
+}
+
+// hepler function for exit system call
+// also useful in check_pointer () for exiting the call
+void exit_handler (int ret_value) {
+	/* Terminate this process. */
+//	check_pointer (user_esp);
+//	uint32_t ret_value = *user_esp;
+//  	user_esp++;
+
+	struct thread *t = thread_current ();
+	printf ("%s: exit(%d)\n",t->name, ret_value);
+
+	t->ret_value = ret_value;
+	// calling sema_up may wake up the main process
+	// waiting in process_wait, you need to synchronize it
+	// up your parent_semaphore 
+	sema_up (&t->parent_sema);
+
+	// now wait till the parent process get's the exit value
+	// wait on parent's child semaphore
+	sema_down (&t->parent->child_sema);
+
+	thread_exit ();
 }

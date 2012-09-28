@@ -1,4 +1,5 @@
 #include "userprog/process.h"
+#include "userprog/syscall.h"
 #include <debug.h>
 #include <inttypes.h>
 #include <round.h>
@@ -20,6 +21,7 @@
 
 static thread_func start_process NO_RETURN;
 static bool load (const char *cmdline, void (**eip) (void), void **esp);
+static char ** cmd_token (char *cmdline, void *aux);
 
 /* Starts a new thread running a user program loaded from
    FILENAME.  The new thread may be scheduled (and may even exit)
@@ -28,6 +30,9 @@ static bool load (const char *cmdline, void (**eip) (void), void **esp);
 tid_t
 process_execute (const char *file_name) 
 {
+//  if (!is_ptr_valid (file_name))
+//	return TID_ERROR;
+
   char *fn_copy;
   tid_t tid;
 
@@ -38,16 +43,31 @@ process_execute (const char *file_name)
     return TID_ERROR;
   strlcpy (fn_copy, file_name, PGSIZE);
 
-  char **kargv = cmd_token (fn_copy);
+  struct semaphore sema;
+  sema_init (&sema,0);
+
+  //char **kargv = cmd_token (fn_copy);
+  char **kargv = cmd_token (fn_copy,(void *)&sema);
 
   /* Create a new thread to execute FILE_NAME. */
   //tid = thread_create (file_name, PRI_DEFAULT, start_process, fn_copy);
-  tid = thread_create (file_name, PRI_DEFAULT, start_process, kargv);
+  //tid = thread_create (file_name, PRI_DEFAULT, start_process, kargv);
+  tid = thread_create (kargv[0], PRI_DEFAULT, start_process, kargv);
   if (tid == TID_ERROR)
     //palloc_free_page (fn_copy); 
     palloc_free_page (kargv[0]); 
+//  else
+//    thread_yield ();
+
+  // wait for the child to load it's executable
   else
-    thread_yield ();
+  {
+    sema_down (&sema);
+
+    // check the load ()'s return value
+    if (!kargv[0])
+	return TID_ERROR;
+  }
 
   return tid;
 }
@@ -55,7 +75,7 @@ process_execute (const char *file_name)
 #define MAX_ARGS 30
 
 /* Breaks the cmdline into tokens & returns the argv-like array. */
-static char **
+/*static char **
 cmd_token (char *cmdline)
 {
   static char *argv[MAX_ARGS];
@@ -75,6 +95,36 @@ cmd_token (char *cmdline)
 //	 printf ("argv[%d] %s\n",i,argv[i]);
 	 argv[++i] = strtok_r (NULL," ",&saveptr);
     }
+  }
+
+  return argv;
+}*/
+
+static char **
+cmd_token (char *cmdline, void *aux)
+{
+  ASSERT (aux != NULL);
+
+  static char *argv[MAX_ARGS];
+  char *saveptr;
+  int i=0;
+
+  argv[i] = strtok_r (cmdline, " " ,&saveptr);
+
+  if (argv[0] == NULL)
+  {
+    PANIC ("commandline given is not valid");
+  }
+
+  else
+  {
+    while (argv[i] != NULL) {
+//	 printf ("argv[%d] %s\n",i,argv[i]);
+	 argv[++i] = strtok_r (NULL," ",&saveptr);
+    }
+
+    argv[i] = (char *)aux;
+    argv[++i] = NULL;
   }
 
   return argv;
@@ -104,6 +154,11 @@ start_process (void *kargv)
   while (argv[argc] != NULL)
 	argc++;
 
+  // last argument is a semaphore address & not a char*
+  argc--;
+  struct semaphore *sema = (struct semaphore *)argv[argc];
+  argv[argc] = NULL;
+
 //  success = load (file_name, &if_.eip, &if_.esp);
   success = load (argv[0], &if_.eip, &if_.esp);
 
@@ -116,8 +171,8 @@ start_process (void *kargv)
 /*
 	// argv[argc] = NULL
         if_.esp -= ptr_size;
-	//*(char **)(if_.esp) = 0;
-	//*(char **)(if_.esp) = NULL;
+	// *(char **)(if_.esp) = 0;
+	// *(char **)(if_.esp) = NULL;
 	*(char *)(if_.esp) = NULL;
         count += ptr_size;
 	offset[argc] = if_.esp;
@@ -165,6 +220,13 @@ start_process (void *kargv)
   /* If load failed, quit. */
   //palloc_free_page (file_name);
   palloc_free_page (argv[0]);
+
+  // since argv is a static variable, i put the status of success  or failure
+  // load () in this thread, at that place
+  argv[0] = (char *)success;
+  sema_up (sema);	// increment the sema's value on which process_execute was waiting
+  //sema_init (&thread_current ()->sema,0);	// initialize the semaphore for sychronizing wait
+
   if (!success) 
     thread_exit ();
 
@@ -193,36 +255,46 @@ process_wait (tid_t child_tid)
 {
   // search for the thread with tid_t child_tid, if not found return -1
   // or keep on waiting for it, till it is in the all_list 
-  /*struct list_elem *e;
+  struct list_elem *e;
   bool childFound = false;
 
-  while (1) {
+  childFound = false;
+//  enum intr_level old_level = intr_disable ();
+  struct list *children = &thread_current ()->children;
+  struct thread *t;
 
-     childFound = false;
+  // traverse the children list for the thread child_tid
+  for (e = list_begin (children); e != list_end (children); e = list_next (e)) {
+    t = list_entry (e, struct thread, child_elem);
 
-    enum intr_level old_level = intr_disable ();
+    // don't know whether this is possible or not
+/*    if (!is_ptr_valid (t)) {
+      list_remove (e);
+      continue;
+    }*/
 
-//    uintptr_t all_list_u = vtop (&all_list);
-    // traverse the all_list for the thread child_tid
-    for (e = list_begin (&all_list); e != list_end (&all_list); e = list_next (&all_list)) {
-      struct thread *t = list_entry (e, struct thread, allelem);
-      if (t->tid == child_tid) {
-        childFound = true;
-        break;
-      }
+    if (t->tid == child_tid) {
+      childFound = true;
+      break;
     }
-   intr_set_level (old_level);
-
-   if (childFound)
-	thread_yield ();
-
-   // need to know what was the return status of the child
-   else return 1;
   }
-*/
+//  intr_set_level (old_level);
 
-//  while (1) {}
-  return -1;
+  if (childFound) {
+//	if (t->status != THREAD_DYING)
+	sema_down (&t->parent_sema);
+	list_remove (e);
+	int32_t ret_val = t->ret_value;
+
+	// signal the thread to call thread_exit ()
+	sema_up (&thread_current ()->child_sema);
+	return ret_val;
+  }
+
+  // either killed by kernel or may be child_tid is not a child of current thread
+  else return -1;
+
+  //return -1;
 }
 
 /* Free the current process's resources. */

@@ -8,5 +8,5 @@ int process_wait (tid_t);
 void process_exit (void);
 void process_activate (void);
 
-static char** cmd_token (char *cmdline);
+//static char** cmd_token (char *cmdline);
 #endif /* userprog/process.h */
