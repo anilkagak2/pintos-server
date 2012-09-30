@@ -188,8 +188,22 @@ thread_create (const char *name, int priority,
     return TID_ERROR;
 
   /* Initialize thread. */
+ // tid = t->tid = allocate_tid ();
   init_thread (t, name, priority);
+
+// this was  the original step
   tid = t->tid = allocate_tid ();
+
+////
+// allocate_tid () needs to be executed after init_thread () only but why (??)
+  // allocate memory for the child information storage 
+  struct child_info *ichild = (struct child_info *) malloc (sizeof (struct child_info));
+  ichild->child = t;
+  ichild->tid = t->tid;
+  ichild->return_value = 0;
+  list_push_back (&thread_current ()->children, &ichild->elem);
+/////
+
 
   /* Prepare thread for first run by initializing its stack.
      Do this atomically so intermediate values for the 'stack' 
@@ -311,6 +325,17 @@ thread_exit (void)
   ASSERT (!intr_context ());
 
 #ifdef USERPROG
+  // empty the children list
+  struct list *children = &thread_current ()->children; 
+  struct list_elem *e;
+
+  while (!list_empty (children)) {
+    e = list_pop_front (children);
+    struct child_info *ichild = list_entry (e, struct child_info, elem);
+//    free (e);
+    free (ichild);
+  }
+
   process_exit ();
 #endif
 
@@ -578,7 +603,15 @@ init_thread (struct thread *t, const char *name, int priority)
   // in it's parent's children list
   if (t != initial_thread)
   {
-    list_push_back (&thread_current ()->children, &t->child_elem);
+//    list_push_back (&thread_current ()->children, &t->child_elem);
+
+    // allocate memory for the child information storage 
+  /*  struct child_info *ichild = (struct child_info *) malloc (sizeof (struct child_info));
+    ichild->child = t;
+    ichild->tid = t->tid;
+    ichild->return_value = 0;
+    list_push_back (&thread_current ()->children, &ichild->elem);
+*/
     t->parent = thread_current ();
   }
   else t->parent = NULL;

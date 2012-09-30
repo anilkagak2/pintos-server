@@ -36,6 +36,14 @@ typedef int tid_t;
 #define PRI_DEFAULT 31                  /* Default priority. */
 #define PRI_MAX 63                      /* Highest priority. */
 
+// structure for storing child information
+struct child_info {
+  struct thread *child;		/* Child's struct thread*. */
+  tid_t tid;			/* Child's thread id. */
+  int return_value;		/* Return value for the child. */
+  struct list_elem elem;	/* Hanger for hanging on children list. */
+};
+
 /* A kernel thread or user process.
 
    Each thread structure is stored in its own 4 kB page.  The

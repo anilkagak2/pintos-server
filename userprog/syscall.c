@@ -339,6 +339,38 @@ syscall_handler (struct intr_frame *f)
 
 }
 
+struct child_info *
+//get_parents_child_info (tid_t tid)
+get_parents_child_info ()
+{
+  struct thread *cur = thread_current ();
+  struct thread *par = cur->parent;
+  tid_t tid = cur->tid;
+  ASSERT (par);
+
+  // search for the thread with tid_t child_tid, if not found return -1
+  // or keep on waiting for it, till it is in the all_list 
+  struct list_elem *e;
+  bool childFound = false;
+
+  struct list *children = &par->children;
+  struct child_info *t;
+
+  // traverse the children list for the thread child_tid
+  for (e = list_begin (children); e != list_end (children); e = list_next (e)) {
+   // currently children list contains dynamically allocated struct
+    t = list_entry (e, struct child_info, elem);
+
+    if (t->tid == tid) {
+      childFound = true;
+      break;
+    }
+  }
+
+  if (childFound) return t;
+  else return NULL;
+}
+
 // hepler function for exit system call
 // also useful in check_pointer () for exiting the call
 void exit_handler (int ret_value) {
@@ -346,6 +378,17 @@ void exit_handler (int ret_value) {
 	struct thread *t = thread_current ();
 	printf ("%s: exit(%d)\n",t->name, ret_value);
 
+	// child info
+	//struct child_info *ichild = get_parents_child_info (t->tid);
+	struct child_info *ichild = get_parents_child_info ();
+
+//	if (ichild) {
+		ichild->return_value = ret_value;
+		ichild->child = NULL;
+//	}
+
+	// may be if ichild concept works, you'll not be in need of this
+	// field in struct thread
 	t->ret_value = ret_value;
 
 	// free the file descriptors so that parent can write on it
@@ -378,9 +421,11 @@ void exit_handler (int ret_value) {
 	// up your parent_semaphore 
 	sema_up (&t->parent_sema);
 
+	// what if parent gets killed or parent exits before child ??
+	// this t->parent will not be a valid pointer then
 	// now wait till the parent process get's the exit value
 	// wait on parent's child semaphore
-	sema_down (&t->parent->child_sema);
+//	sema_down (&t->parent->child_sema);
 
 	thread_exit ();
 }

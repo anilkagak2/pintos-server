@@ -236,29 +236,26 @@ process_wait (tid_t child_tid)
   struct list_elem *e;
   bool childFound = false;
 
-  childFound = false;
-//  enum intr_level old_level = intr_disable ();
   struct list *children = &thread_current ()->children;
-  struct thread *t;
+//  struct thread *t;
+  struct child_info *t;
 
   // traverse the children list for the thread child_tid
   for (e = list_begin (children); e != list_end (children); e = list_next (e)) {
-    t = list_entry (e, struct thread, child_elem);
 
-    // don't know whether this is possible or not
-/*    if (!is_ptr_valid (t)) {
-      list_remove (e);
-      continue;
-    }*/
+    // previous way of  organizing children list
+//    t = list_entry (e, struct thread, child_elem);
+
+    // currently children list contains dynamically allocated struct
+    t = list_entry (e, struct child_info, elem);
 
     if (t->tid == child_tid) {
       childFound = true;
       break;
     }
   }
-//  intr_set_level (old_level);
 
-  if (childFound) {
+/*  if (childFound) {
 //	if (t->status != THREAD_DYING)
 	sema_down (&t->parent_sema);
 	list_remove (e);
@@ -267,6 +264,38 @@ process_wait (tid_t child_tid)
 	// signal the thread to call thread_exit ()
 	sema_up (&thread_current ()->child_sema);
 	return ret_val;
+  }
+*/
+
+  // most probably is_thread (t->child) should yield False, if t->child is not a thread(??)
+  if (childFound) {
+    // child is still alive
+    //if (is_thread (t->child)) {
+    if ( t->child != NULL ) {
+	sema_down (&t->child->parent_sema);
+	list_remove (e);
+	//int32_t ret_val = t->child->ret_value;
+	int32_t ret_val = t->return_value;
+
+	// should work without this if the ichild concept works fine
+	// signal the thread to call thread_exit ()
+//	sema_up (&thread_current ()->child_sema);
+
+	// free the allocated struct
+	free (t);
+
+	return ret_val;
+    }
+
+    // child dead :(
+    else {
+	int ret_val = t->return_value;
+
+	list_remove (e);
+	free (t);
+
+	return ret_val;
+    }
   }
 
   // either killed by kernel or may be child_tid is not a child of current thread
