@@ -10,4 +10,7 @@ void check_pointer (void *);
 void exit_handler (int);
 int open_handler (const char *);
 
+// lock for accessing the filesys code
+static struct lock filesys_lock;
+
 #endif /* userprog/syscall.h */

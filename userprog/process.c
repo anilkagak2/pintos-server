@@ -75,31 +75,6 @@ process_execute (const char *file_name)
 #define MAX_ARGS 30
 
 /* Breaks the cmdline into tokens & returns the argv-like array. */
-/*static char **
-cmd_token (char *cmdline)
-{
-  static char *argv[MAX_ARGS];
-  char *saveptr;
-  int i=0;
-
-  argv[i] = strtok_r (cmdline, " " ,&saveptr);
-
-  if (argv[0] == NULL)
-  {
-    PANIC ("commandline given is not valid");
-  }
-
-  else
-  {
-    while (argv[i] != NULL) {
-//	 printf ("argv[%d] %s\n",i,argv[i]);
-	 argv[++i] = strtok_r (NULL," ",&saveptr);
-    }
-  }
-
-  return argv;
-}*/
-
 static char **
 cmd_token (char *cmdline, void *aux)
 {
@@ -161,10 +136,10 @@ start_process (void *kargv)
 
   // open process's executable & call file_deny_write () on it
   int fd_exe = open_handler (argv[0]);
-/*  if (fd_exe == -1) {
-    printf ("Couldn't open the executable for denying writes on it\n");
-  }
-*/
+
+  // Accessing the filesys code, it's Critical Section
+//  lock_acquire (&filesys_lock);
+
   if (fd_exe != -1) {
     struct file *fp = search_fd_list (fd_exe);
     file_deny_write (fp); 
@@ -173,21 +148,15 @@ start_process (void *kargv)
 //  success = load (file_name, &if_.eip, &if_.esp);
   success = load (argv[0], &if_.eip, &if_.esp);
 
+  // let other process work with filesys code
+ // lock_release (&filesys_lock);
+
   if (success) {
         int i = argc - 1;
         int count = 0;
         size_t ptr_size = sizeof (char *);
 	uint32_t offset[MAX_ARGS];
 
-/*
-	// argv[argc] = NULL
-        if_.esp -= ptr_size;
-	// *(char **)(if_.esp) = 0;
-	// *(char **)(if_.esp) = NULL;
-	*(char *)(if_.esp) = NULL;
-        count += ptr_size;
-	offset[argc] = if_.esp;
-*/
 	// argv[argc-1] --> argv[0]
 	// may be need to look till strlen(argv[i]) +1
 	for (;i >= 0; i--) {
@@ -224,8 +193,6 @@ start_process (void *kargv)
 
         if_.esp -= ptr_size;
         *(int **)if_.esp = 0;             // fake return address 
-//        if_.esp -= ptr_size;
-
   }
 
   /* If load failed, quit. */

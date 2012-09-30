@@ -23,7 +23,7 @@ struct lock
     struct thread *holder;      /* Thread holding lock (for debugging). */
     struct semaphore semaphore; /* Binary semaphore controlling access. */
     struct list_elem elem;	/* List element for locks, in waiters. */
-    struct list_elem allelem;	/* List element for all_locks list. */
+//    struct list_elem allelem;	/* List element for all_locks list. */
   };
 
 void lock_init (struct lock *);
@@ -33,7 +33,7 @@ void lock_release (struct lock *);
 bool lock_held_by_current_thread (const struct lock *);
 
 bool more_priority_lock (const struct list_elem *a, const struct list_elem *b, void *aux);
-struct list all_locks;	/* List of all the locks.  */
+//struct list all_locks;	/* List of all the locks.  */
 
 /* Condition variable. */
 struct condition 

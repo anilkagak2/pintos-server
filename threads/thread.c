@@ -26,7 +26,7 @@ static struct list ready_list;
 
 /* List of all processes.  Processes are added to this list
    when they are first scheduled and removed when they exit. */
-//static struct list all_list;
+static struct list all_list;
 
 /* Idle thread. */
 static struct thread *idle_thread;
@@ -92,13 +92,13 @@ thread_init (void)
 {
   ASSERT (intr_get_level () == INTR_OFF);
 // do u really need this
-  list_init (&all_locks);			// initialize the list of all locks
+//  list_init (&all_locks);			// initialize the list of all lockis
+
+// initialize the lock for filesystem access
+//  lock_init (&filesys_lock);
   lock_init (&tid_lock);
   list_init (&ready_list);
   list_init (&all_list);
-
-// initialize the lock for filesystem access
-  lock_init (&filesys_lock);
 
   /* Set up a thread structure for the running thread. */
   initial_thread = running_thread ();
@@ -571,6 +571,7 @@ init_thread (struct thread *t, const char *name, int priority)
   // STDIN 0, STDOUT 1
   t->fd_to_allot = 2;
 
+  //t->waiting_on_child = NULL;
   // may be add STDIN & STDOUT to this fd list
 
   // if the current thread is not the main thread, then insert it's list_elem

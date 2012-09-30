@@ -16,10 +16,15 @@ int open_handler (const char *file);
 struct file * search_fd_list (int fd);
 struct file_descriptor *give_fdescriptor (int fd);
 
+// lock for accessing the filesys code
+//static struct lock filesys_lock;
+
 void
 syscall_init (void) 
 {
   intr_register_int (0x30, 3, INTR_ON, syscall_handler, "syscall");
+
+  lock_init (&filesys_lock);
 }
 
 // checks the validity of user provided addresses
@@ -89,8 +94,12 @@ syscall_handler (struct intr_frame *f)
 	const char *cmd_line = *user_esp;
 	user_esp++;
 
-	if (is_ptr_valid (cmd_line))
+	// Don't acquire the filesys lock here, it'll be wastage of the resource
+	if (is_ptr_valid (cmd_line)) {
+		lock_acquire (&filesys_lock);
 		f->eax = process_execute (cmd_line);
+		lock_release (&filesys_lock);
+	}
 	else f->eax = -1;
 
 	break;
@@ -120,16 +129,15 @@ syscall_handler (struct intr_frame *f)
 	check_pointer (file_name);
 
 	// it's a critical section : accessing filesystem code
-//	lock_acquire (&filesys_lock);
+	lock_acquire (&filesys_lock);
 	f->eax = filesys_create (file_name, initial_size);
-//	lock_release (&filesys_lock);
+	lock_release (&filesys_lock);
 
 	break;
 	}
 
     case SYS_REMOVE: {
 	/* Delete a file. */
-//	printf ("Remove is called\n");
 	check_pointer (user_esp);
 	const char *file_name = *user_esp;
 	user_esp++;
@@ -137,9 +145,9 @@ syscall_handler (struct intr_frame *f)
 	check_pointer (file_name);
 
 	// it's a critical section : accessing filesystem code
-//	lock_acquire (&filesys_lock);
+	lock_acquire (&filesys_lock);
 	f->eax = filesys_remove (file_name);
-//	lock_release (&filesys_lock);
+	lock_release (&filesys_lock);
 
 	break;
 	}
@@ -148,52 +156,22 @@ syscall_handler (struct intr_frame *f)
 	// need to do it somewhere in initialization
     case SYS_OPEN: {
 	/* Open a file. */
-//	printf ("Open is called\n");
 	check_pointer (user_esp);
 	const char *file_name = *user_esp;
 	user_esp++;
 	
 	check_pointer (file_name);
 
-/*	// it's a critical section : accessing filesystem code
-//	lock_acquire (&filesys_lock);
-	struct file *fp = filesys_open (file_name);
-//	lock_release (&filesys_lock);
-
-	// need to set the f->eax value
-	// could not open the file
-	if (!fp)
-		f->eax = -1;
-
-	// need to give it a thought
-	else {
-		struct file_descriptor *fdptr = (struct file_descriptor *)malloc(sizeof(struct file_descriptor));
-
-		if(!fdptr) {
-			printf ("Cannot allocate memory to file descriptor pointer\n");
-			file_close (fp);
-			f->eax = -1;
-		}	
-		
-		else {
-			fdptr->fp = fp;
-			fdptr->fd = t->fd_to_allot++;
-//			printf ("Thread %s has fd_to_allot is %d\n",t->name, t->fd_to_allot);
-			// it's a fault to use list_insert here (Why??)
-			//list_insert (&t->fd_list, &fdptr->elem);
-			list_push_back (&t->fd_list, &fdptr->elem);
-			f->eax = fdptr->fd;
-		}
-	}
-*/
+	// it's a critical section : accessing filesystem code
+	lock_acquire (&filesys_lock);
 	f->eax = open_handler (file_name);
+	lock_release (&filesys_lock);
+
 	break;
 	}
 
     case SYS_FILESIZE: {
 	/* Obtain a file's size. */
-//	printf ("Filesize is called\n");
-
 	check_pointer (user_esp);
 	int fd = *user_esp;
 	user_esp++;
@@ -205,7 +183,9 @@ syscall_handler (struct intr_frame *f)
 	}
 
 	else {
+		lock_acquire (&filesys_lock);
 		f->eax = file_length (fp);
+		lock_release (&filesys_lock);
 	}
 
 	break;
@@ -213,8 +193,6 @@ syscall_handler (struct intr_frame *f)
 
     case SYS_READ: {
 	/* Read from a file. */
-//	printf ("Read is called\n");
-
 	check_pointer (user_esp);
 	int fd = *user_esp;
 	user_esp++;
@@ -238,13 +216,13 @@ syscall_handler (struct intr_frame *f)
 
 		struct file *fp = search_fd_list (fd);
 		if (!fp) {
-	//		printf ("No such file found in fd_list\n");
-	//		f->eax = -1;
 			exit_handler (-1);
 		}
 
 		else {
+			lock_acquire (&filesys_lock);
 			f->eax = file_read (fp, buffer,size);
+			lock_release (&filesys_lock);
 		}
 	}
 	break;
@@ -252,7 +230,6 @@ syscall_handler (struct intr_frame *f)
 
     case SYS_WRITE: {
 	/* Write to a file. */
-	//printf ("Write is called\n");
 	check_pointer (user_esp);
 	int fd = *user_esp;
 	user_esp++;
@@ -279,7 +256,9 @@ syscall_handler (struct intr_frame *f)
 		}
 
 		else {
+			lock_acquire (&filesys_lock);
 			f->eax = file_write (fp, buffer,size);
+			lock_release (&filesys_lock);
 		}
 	}
 
@@ -307,7 +286,9 @@ syscall_handler (struct intr_frame *f)
 	}
 
 	else {
+		lock_acquire (&filesys_lock);
 		file_seek (fp, pos);
+		lock_release (&filesys_lock);
 	}
 
 	break;
@@ -325,7 +306,9 @@ syscall_handler (struct intr_frame *f)
 	}
 
 	else {
+		lock_acquire (&filesys_lock);
 		f->eax = file_tell (fp);
+		lock_release (&filesys_lock);
 	}
 
 	break;
@@ -343,7 +326,10 @@ syscall_handler (struct intr_frame *f)
 	}
 
 	else {
+		lock_acquire (&filesys_lock);
 		file_close (fdptr->fp);
+		lock_release (&filesys_lock);
+
 		f->eax = list_remove (&fdptr->elem);
 		free (fdptr);
 	}
@@ -367,11 +353,24 @@ void exit_handler (int ret_value) {
 	struct list *fd_list = &t->fd_list;
 	struct list_elem *e;
 
+	lock_acquire (&filesys_lock);
+
 	while (!list_empty (fd_list)) {
 		e = list_pop_front (fd_list);
 		struct file_descriptor *fdptr = list_entry (e, struct file_descriptor, elem);
 		file_close (fdptr->fp);
 		free (fdptr);
+	}
+
+	lock_release (&filesys_lock);
+
+	// release all the lock's which the thread is holding
+	struct list *lock_list = &t->locks_holding;
+	while (!list_empty (lock_list)) {
+		e = list_pop_front (lock_list);
+		struct lock *_lock = list_entry (e, struct lock,elem);
+
+		lock_release (_lock);
 	}
 
 	// calling sema_up may wake up the main process
@@ -390,9 +389,9 @@ void exit_handler (int ret_value) {
 int open_handler (const char *file_name)
 {
   // it's a critical section : accessing filesystem code
-  //lock_acquire (&filesys_lock);
+//  lock_acquire (&filesys_lock);
   struct file *fp = filesys_open (file_name);
-  //lock_release (&filesys_lock);
+//  lock_release (&filesys_lock);
 
   struct thread *t = thread_current ();
 

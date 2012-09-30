@@ -123,6 +123,7 @@ struct thread
     struct thread *parent;		/* Parent's thread pointer. */
     struct list fd_list;		/* List of file descriptors of thread. */
     int fd_to_allot;			/* File descriptor number to be allotted. */
+    //struct thread *waiting_on_child;	/* Child for which the thread is waiting. */
 #endif
 
     /* Owned by thread.c. */
@@ -136,10 +137,10 @@ extern bool thread_mlfqs;
 
 /* List of all processes.  Processes are added to this list
    when they are first scheduled and removed when they exit. */
-static struct list all_list;
+//static struct list all_list;
 
 // lock for accessing the filesystem code
-static struct lock filesys_lock;
+//static struct lock filesys_lock;
 
 void thread_init (void);
 void thread_start (void);
