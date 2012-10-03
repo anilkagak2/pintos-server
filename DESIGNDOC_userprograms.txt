@@ -1,0 +1,1012 @@
+##	NAME			ANIL KAG
+##	ROLL NO. 		10010111
+##	PINTOS ASSIGNMENT:	USERPROG 2A,2B & 2C with someparts of 2D
+##	DATED			25/9/2012
+
+--	DATA STRUCTURES
+
+## thread.h
+
+ introduced a new structure holding any open file' struct pointer it holds
+	file descriptor too. Allocated independent to any other process.
+
+	// structure for the file descriptor
+	struct file_descriptor
+	{
+	  struct file *fp;              /* File structure. */
+	  int fd;                       /* File Descriptor. */
+	  struct list_elem elem;        /* Element for inserting this into thread's
+		                                descriptor list. */
+	};
+
+ a new structure to get rid of some restrictions put in exit syscall, now a
+	process puts it's exit status on parent's this struct when its exits
+	even any accidental killing of child will ensure to put the exit
+	status there
+
+	// structure for storing child information
+	struct child_info
+	{
+	  struct thread *child;         /* Child's struct thread*. */
+	  tid_t tid;                    /* Child's thread id. */
+	  int return_value;             /* Return value for the child. */
+	  struct list_elem elem;        /* Hanger for hanging on children list. */
+	};
+
+
+ changed the 'struct thread' structure (in addition to the changes
+		done in part 1)
+	#ifdef USERPROG
+	    int ret_value;                      /* Return value for the thread. */
+	    struct semaphore child_sema;        /* Semaphore for synchronization with process_wait for children. */
+	    struct semaphore parent_sema;       /* Parent tries to down this semaphore for wait syscall. */
+	    struct list children;               /* List of all the children of the thread. */
+	    struct list_elem child_elem;        /* To insert in the parent's children list. */
+	    struct thread *parent;              /* Parent's thread pointer. */
+	    struct list fd_list;                /* List of file descriptors of thread.*/
+	    int fd_to_allot;                    /* File descriptor number to be allotted. */
+	#endif
+
+## syscall.h
+ Lock for accessing the file system code as it should be treated as a Critical
+	Section (as per pintos.pdf). Now file system code can be accessed only
+	by thread exclusively holding this lock. Lock will be released by the 
+	exit syscall, if the thread gets killed too.
+
+	static struct lock filesys_lock;
+
+
+
+--	INITIALIZATIONS
+
+## thread.c
+ - init_thread ()
+	- initialize semaphores child_sema & parent_sema for the thread
+	- initialize the children list of the thread (children)
+	- initialize thread's file descriptor list (fd_list)
+	- initialize the fd_to_allot as 2 (Leaving 0,1 for STDIN, STDOUT)
+		currently the fd_list doesn't contain the entry for STDIN &
+		STDOUT (if required in future it can be added)
+	- initialize the thread's parent pointer if it's not the initial
+		thread (because the init thread has no parent)
+	- if the current thread is not the main thread, then insert it's list_elem
+		in it's parent's children list, as main thread has no parent
+
+ - thread_create ()
+	- allocate_tid () needs to be executed after init_thread () only but why (??)
+	- so for adding the child_info struct (ichild) to parent's children
+		list you need to allocate memory for that struct & initialize it
+		only after allocate_tid () is called.
+	- initialize the ichild's tid, thread struct with that of child, keep
+		return value as 0 (default)
+	- add the child to parent's children list
+
+## syscall.c                                                                        
+ - syscall_init ()
+	- initialize the filesys_lock
+
+
+--	FUNCTIONS ADDED & CHANGED
+	THEIR LOGIC ALONG WITH THE APPRORIATE SYCHRONIZATION
+
+## process.c
+
+static char **
+cmd_token (char *cmdline, void *aux)
+	- breaks the cmdline into a char *argv[] like array, aux is added to the 
+		last of the list before NULL
+	- this function is called from	process_execute () & that function
+		has to wait till the new process loads it's executable & hence
+		need some kind of semaphore
+	- this aux is a struct semaphore* casted into void pointer & added to
+		the argv[] for sending the argument to the child process &
+		then parent process will try to down this semaphore
+	------------------- start Function ---------
+	{
+	  ASSERT (aux != NULL);
+	  static char *argv[MAX_ARGS];
+	  char *saveptr;
+	  int i=0;
+
+	  argv[i] = strtok_r (cmdline, " " ,&saveptr);
+
+	  if (argv[0] == NULL)
+	  {
+	    PANIC ("commandline given is not valid");
+	  }
+
+	  else
+	  {
+	    while (argv[i] != NULL) {
+		 argv[++i] = strtok_r (NULL," ",&saveptr);
+	    }
+
+	    argv[i] = (char *)aux;
+	    argv[++i] = NULL;
+	  }
+
+	  return argv;
+	}
+	--------------------- end Function -------
+
+## process.c
+## functions changed
+tid_t
+process_execute (const char *cmd_line)
+	- this function creates a new thread for executing the cmd_line
+	- it breaks the command string into a C commandline argv[] array
+	- this function should wait till the newly created thread loads it's
+		  executeable & hence sema is used
+	- if thread_create () was successful then wait on the semaphore
+		which will be sema_up()'d by the child thread after load ()
+		returns & child returns the load()'s return value in kargv[0]
+		which was passed to it in thread_create()
+	- if child was unsuccessful in loading it's executeable then kargv[0]
+		will be false
+
+	------------------- start Function ---------
+	{
+	  --
+	  --
+	  struct semaphore sema;
+	  sema_init (&sema,0);
+
+	  char **kargv = cmd_token (fn_copy,(void *)&sema);
+	
+	  --
+	  --
+	  /* Create a new thread to execute FILE_NAME. */
+	  tid = thread_create (kargv[0], PRI_DEFAULT, start_process, kargv);
+	  if (tid == TID_ERROR)
+	    palloc_free_page (kargv[0]); 
+
+	  // wait for the child to load it's executable
+	  else
+	  {
+	    sema_down (&sema);
+
+	    // check the load ()'s return value
+	    if (!kargv[0])
+		return TID_ERROR;
+	  }
+
+	  return tid;
+	}
+	--------------------- end Function -------
+
+static void
+start_process (void *kargv)
+	- apart from the initial functioning
+	- check whether kargv is valid or not
+	- cast it to char ** argv[] array
+	- count the number of arguments given for extracting the semaphore
+		embedded inside the argv[], extract it & decrease the argc by 1
+	- also opens it's own executable & denies writes to it via calling 
+		file_deny_write ()
+	- process_execute () wait on this function till it gives the load ()'s
+		return value to it & that function in terms is called by exec
+		syscall while holding the filesys lock so no need to acquire
+		lock for filesys lock here**
+	- after loading the executeable for the thread in memory setup the
+		stack
+	- Copy all the strings on the stack using memcpy (), then check for
+		the alignment of the stack pointer (as it is accessed as a
+		4byte entity)
+	- Put argv[argc] = NULL as per the C Standards
+	- Then place the pointers to the argv[]'s in reverse order i.e. starting at
+		argc-1 till 0 (stored in the offset[]s which were initialized while
+		copying the strings)
+	- Finally put &argv (&argv[0]) on the stack,then argc & a fake return address 
+		as the thread will start executing the main code after
+		returning from this function, actually it is simulated as if
+		the system came out of an interrupt & the process before interrupt was
+		stored in intr_frame if & hence main code starts executing
+	- After this setup call the signal the parent thread by sema_up() on
+		the semaphore given to it in argv[] & placing the load's
+		return value in argv[0]
+
+	------------------- start Function ---------
+	{
+	  ASSERT (is_kernel_vaddr (kargv));
+	  char **argv = (char **)kargv;
+	  struct intr_frame if_;
+	  bool success;
+
+	  static int argc = 0;
+	  while (argv[argc] != NULL)
+		argc++;
+
+	  --
+	  --
+	  --
+
+	  // last argument is a semaphore address & not a char*
+	  argc--;
+	  struct semaphore *sema = (struct semaphore *)argv[argc];
+	  argv[argc] = NULL;
+
+	  // open process's executable & call file_deny_write () on it
+	  int fd_exe = open_handler (argv[0]);
+
+	  // what if the file couldn't be opened (??)
+	  if (fd_exe != -1) {
+	    struct file *fp = search_fd_list (fd_exe);
+	    file_deny_write (fp); 
+	  }
+
+	  success = load (argv[0], &if_.eip, &if_.esp);
+
+	  if (success) {
+        	int i = argc - 1;
+	        int count = 0;
+        	size_t ptr_size = sizeof (char *);
+		uint32_t offset[MAX_ARGS];
+
+		// argv[argc-1] --> argv[0]
+		for (;i >= 0; i--) {
+        	        if_.esp -= strlen (argv[i]) + 1;
+                	memcpy (if_.esp,argv[i], strlen (argv[i]) + 1);
+	                count += strlen (argv[i]) + 1;
+			offset[i] = if_.esp;
+	        }
+
+        	// word align the stack pointer
+	        if ( ((uint32_t)if_.esp % 4) != 0) {
+			int decrease = ((uint32_t)if_.esp % 4);
+		// i have to keep track of the offset till argv[0] & not the alignment
+        	        count += decrease;
+	               	if_.esp -= decrease;
+        	}
+
+		// argv[argc] = NULL
+        	if_.esp -= ptr_size;
+	        *(char **)(if_.esp) = NULL;
+
+		// place the pointers to the argv's on the stack
+		i = argc - 1;
+		for (;i >= 0; i--) {
+                	if_.esp -= ptr_size;
+	                *(char **)(if_.esp) = offset[i];
+	        }
+
+        	if_.esp -= ptr_size;
+	        *(char **)if_.esp = if_.esp + ptr_size;             // argv
+
+        	if_.esp -= ptr_size;
+	        *(int *)if_.esp = argc;               // argc
+
+        	if_.esp -= ptr_size;
+	        *(int **)if_.esp = 0;             // fake return address 
+  	}
+
+	  // since argv is a static variable, i put the status of success  or failure
+	  // load () in this thread, at that place
+	  argv[0] = (char *)success;
+	  sema_up (sema);	// increment the sema's value on which process_execute was waiting
+	  --
+	  --
+	  --
+	}
+	--------------------- end Function -------
+
+int
+process_wait (tid_t child_tid)
+	- called by a thread for waiting on a child process (child_tid)
+	- this time i've changed the children list in it's structure,
+		previously, it's entry may be invalid as it contained the
+		list_elem of child (which becomes invalid once the child exits)
+		so to remove it struct child_info is introduced, it's
+		dynamically allocated & destroyed on thread's exit.
+	- searches in the current thread's children list for the presence of
+		child_tid, if found then wait till the completion of the
+		child by calling sema_down () on child's parent_semaphore,
+		else return -1(as there is some problem in waiting for this thread)
+	- returns -1 in case child is not found in the children list
+
+	--------------------- start Function -------
+	{
+	  struct list_elem *e;
+	  bool childFound = false;
+
+	  childFound = false;
+  	  struct list *children = &thread_current ()->children;
+	  struct child_info *t;
+
+	  // traverse the children list for the thread child_tid
+	  for (e = list_begin (children); e != list_end (children); e = list_next (e))
+	  {
+		// currently children list contains dynamically allocated struct
+		t = list_entry (e, struct child_info, elem);
+
+		if (t->tid == child_tid) {
+			childFound = true;
+			break;
+		}
+	  }
+
+	  if (childFound) {
+
+	    // child is still alive
+	    if ( t->child != NULL ) {
+	        sema_down (&t->child->parent_sema);
+        	list_remove (e);
+	        int32_t ret_val = t->return_value;
+
+        	// free the allocated struct
+	        free (t);
+
+        	return ret_val;
+	    }
+
+	    // child dead :(
+	    else {
+	        int ret_val = t->return_value;
+
+	        list_remove (e);
+        	free (t);
+
+	        return ret_val;
+	    }
+  	  }
+
+	  // given tid is not a child of current thread
+	  else return -1;
+	}
+	--------------------- end Function -------
+
+## syscall.c
+
+void
+syscall_init (void)
+	- initializes the filesys_lock
+	{
+	  -- 
+	  lock_init (&filesys_lock);
+	}
+
+bool
+is_ptr_valid (void *ptr)
+	- checks the validity of user provided addresses
+	- returns true only if ptr is not NULL & if it's a user virtual address
+		& if it is available in page directory of the thread
+	
+	--------------------- start Function -------
+	{
+	  if (ptr == NULL) return false;
+	  else if (!is_user_vaddr (ptr)) return false;
+	  else if (!pagedir_get_page (thread_current ()->pagedir, ptr)) return false;
+	  else return true;
+	}
+	--------------------- end Function -------
+
+void
+check_pointer (void *ptr)
+	- handles the problem of calling is_ptr_valid () on ptr &
+		call exit_handler(-1) if ptr is invalid
+	
+	--------------------- start Function -------
+	{
+	  if (!is_ptr_valid (ptr)) {
+	     exit_handler (-1);
+	  }
+	}
+	--------------------- end Function -------
+
+struct child_info *
+get_parents_child_info ()
+	- searches the parent's children list for it's own child_info
+		struct, if found it returns that, otherwise returns NULL
+	- this function only reads the parent's child struct doesn't 
+		modify it
+	--------------------- start Function -------
+	{
+	  struct thread *cur = thread_current ();
+	  struct thread *par = cur->parent;
+	  tid_t tid = cur->tid;
+	  ASSERT (par);
+
+	  // search for the thread with tid_t child_tid, if not found return -1
+	  // or keep on waiting for it, till it is in the all_list 
+	  struct list_elem *e;
+	  bool childFound = false;
+
+	  struct list *children = &par->children;
+	  struct child_info *t;
+
+	  // traverse the children list for the thread child_tid
+	  for (e = list_begin (children); e != list_end (children); e = list_next (e))
+	  {
+	   // currently children list contains dynamically allocated struct
+	    t = list_entry (e, struct child_info, elem);
+
+	    if (t->tid == tid) {
+	      childFound = true;
+	      break;
+	    }
+	  }
+
+	  if (childFound) return t;
+	  else return NULL;
+	}
+	--------------------- end Function -------
+
+int
+open_handler (const char *file_name)
+	- helper function for the open system call
+	- this function is called after acquiring the filesys_lock
+	- it opens the file & allocates a new struct file descriptor
+		through malloc & fills the fields & pushes it to the
+		fd_list for future access
+
+	--------------------- start Function -------
+	{
+	  struct file *fp = filesys_open (file_name);
+	  struct thread *t = thread_current ();
+
+	  // could not open the file
+	  if (!fp) return -1;
+
+	  else
+	  {
+	    struct file_descriptor *fdptr = (struct file_descriptor *)
+					malloc(sizeof(struct file_descriptor));
+
+	    if(!fdptr) 
+	    {
+        	printf ("Cannot allocate memory to file descriptor pointer\n");
+	        file_close (fp);
+	        return -1;
+	    }
+
+	    else
+	    {
+        	fdptr->fp = fp;
+	        fdptr->fd = t->fd_to_allot++;
+
+	        // it's a fault to use list_insert here (Why??)
+	        //list_insert (&t->fd_list, &fdptr->elem);
+	        list_push_back (&t->fd_list, &fdptr->elem);
+	        return fdptr->fd;
+	    }
+	  }
+	}
+	--------------------- end Function -------
+
+struct file *
+search_fd_list (int fd)
+	- searches the thread's fd_list for the presence of fd,
+		if found returns the struct file* for it
+		else return NULL
+
+	--------------------- start Function -------
+	{
+          struct list *fd_list = &thread_current ()->fd_list;
+          struct list_elem *e;
+
+	  for (e = list_begin (fd_list); e !=  list_end (fd_list); e = list_next(e))
+	  {
+		struct file_descriptor *fdptr = list_entry (e, struct file_descriptor, elem);
+
+                if (fdptr->fd == fd)
+                        return fdptr->fp;
+	  }
+	  return NULL;
+	}
+	--------------------- end Function -------
+
+struct file_descriptor *
+give_fdescriptor (int fd)
+	- searches the thread's fd_list for the presence of fd,
+		if found returns the struct file_descriptor* for it
+		else return NULL
+
+	--------------------- start Function -------
+	{
+          struct list *fd_list = &thread_current ()->fd_list;
+          struct list_elem *e;
+
+	  for (e = list_begin (fd_list); e !=  list_end (fd_list); e = list_next(e))
+	  {
+		struct file_descriptor *fdptr = list_entry (e, struct file_descriptor, elem);
+
+                if (fdptr->fd == fd)
+                        return fdptr;
+	  }
+	  return NULL;
+	}
+	--------------------- end Function -------
+
+
+void
+exit_handler (int ret_value)
+	- hepler function for exit system call
+	- also useful in check_pointer () for exiting the call
+	- closes all the file descriptors & removes them from the fd_list
+	- also releases all the locks which the thread holds
+	- Need to pass the info to the parent thread
+		Previously it was done like this
+		need to wait till the parent process extracts the exit status
+		otherwise on calling thread_exit() function the thread
+		structure will get destroyed & then parent cannot extract the
+		information out of the it.
+		Also the list_elem child_elem in the parent's children list
+		should be removed.
+		Current thread signal's parent by calling sema_up () on it's
+		parent_semaphore & wait's on parent's child_semaphore by
+		sema_down () on it (accessible by the parent pointer)
+		Finally after synchornizing with parent & passing the exit code(with
+		the help of ret_value field), call thread_exit ().
+
+		But this implementation created some critical problems like 
+		thread exiting before parent waits under some cases (like one 
+		in syn-read), so instead ichild was introduced & thread puts
+		return value there & parent extracts return value from there
+		& this thread exits irrespective of waiting for parent to know
+		the return status (uselessly wasting CPU cycles in sema_down
+		(&child_sema) ).
+
+	--------------------- start Function -------
+	{
+		/* Terminate this process. */
+		struct thread *t = thread_current ();
+		printf ("%s: exit(%d)\n",t->name, ret_value);
+
+	        // child info
+        	struct child_info *ichild = get_parents_child_info ();
+
+		if (ichild) {
+                	ichild->return_value = ret_value;
+	                ichild->child = NULL;
+		}
+
+        	// may be if ichild concept works, you'll not be in need of this
+	        // field in struct thread
+	        t->ret_value = ret_value;
+
+	        // free the file descriptors so that parent can write on it
+	        // free the memory used by the file descriptor structures
+	        struct list *fd_list = &t->fd_list;
+	        struct list_elem *e;
+
+        	lock_acquire (&filesys_lock);
+
+	        while (!list_empty (fd_list)) {
+	                e = list_pop_front (fd_list);
+        	        struct file_descriptor *fdptr = list_entry (e, struct
+								file_descriptor, elem);
+	                file_close (fdptr->fp);
+        	        free (fdptr);
+	        }
+
+	        lock_release (&filesys_lock);
+
+        	// release all the lock's which the thread is holding
+	        struct list *lock_list = &t->locks_holding;
+	        while (!list_empty (lock_list)) {
+        	        e = list_pop_front (lock_list);
+	                struct lock *_lock = list_entry (e, struct lock,elem);
+
+        	        lock_release (_lock);
+        	}
+
+		// calling sema_up may wake up the main process
+		// waiting in process_wait, you need to synchronize it
+		// up your parent_semaphore 
+		sema_up (&t->parent_sema);
+
+		thread_exit ();
+	}
+	--------------------- end Function -------
+
+
+static void
+syscall_handler (struct intr_frame *f)
+	- interrupt handler for the internal interrupt (vector no. 0x30)
+	- called when a process calls any of the syscalls given in <syscall.h>
+	- given the intr_frame for the internal interrupt so that we can
+		extract the parameters passed for the system function call
+		available on the calling process's system stack
+	- extract the stack pointer(esp) of the calling thread with the help
+		of the intr_frame
+	- check the pointers for their validity by check_pointer(), which
+		calls exit_handler if the pointer is invalid
+	- pop the syscall number from the stack pointed by user_esp
+	- check against the syscall numbers defined in <syscall-nr.h>
+	- then handling the case against which the syscall_no matches
+	- all the file system code is accessed after acquiring the filesys
+		lock
+	- in system calls where return value is required, it stores the return
+		 value on f->eax
+	- Following cases are handled(as of now, tests cases are nunning for
+		them):
+	> SYS_HALT
+		- no parameters needed
+		- simply calls power_off() which immediately shut's down the computer
+
+	> SYS_EXIT
+		- exit status needs to be extracted
+		- calls exit_handler () with the return status
+
+	> SYS_EXEC
+		- needs the commandline to be executed
+		- extracts the commandline & checks for it's validity
+		- if valid then calls process_execute() & stores the return 
+			value in frame's eax field, which will be given to the
+			thread on returning from this interrupt handler
+
+	> SYS_WAIT
+		- needs thread id as a parameter
+		- extracts the thread id from the stack & call process_wait ()
+			with this thread id
+		
+	> SYS_CREATE
+		- need a file name to be created & it's initial size as a parameters
+		- extracts them & calls filesys_create ()
+
+	> SYS_REMOVE
+		- need a file name to be removed as a parameter 
+		- extracts it & calls filesys_remove ()
+	
+	> SYS_OPEN
+		- extracts the argument file name from stack & calls
+			open_handler while holding the lock
+		- release the lock after the open_handler returns
+
+	> SYS_FILESIZE
+		- search the file descriptor in the fd_list of thread
+			if found calls file_length () on the file struct
+
+	> SYS_READ
+		- need file descriptor(from where to read), buffer(to which
+			it'll be read) & length of the buffer as a parameters
+		- checks the validity of the buffer
+		- if fd is  STDIN_FILENO, it read from keyboard with
+			input_getc ()
+		- else it searches the fd_list for fd & uses file_read to read
+			into the buffer given as parameter
+
+	> SYS_WRITE
+		- need file descriptor(where to output), buffer(to output)
+			& length of the buffer as a parameters
+		- checks the validity of the buffer
+		- if fd is STDOUT_FILENO, it calls put_buf ()
+		- else it outputs to the file via file_write () with
+			appropriate parameters
+
+	> SYS_SEEK
+		- need file descriptor & file position (where to put the read head)
+		- calls file_seek after extracting the file struct for it
+
+	> SYS_TELL
+		- need file descriptor (of which the position is to be
+			displayed)
+		- calls file_tell on the file struct
+
+	> SYS_CLOSE
+		- need the file descriptor to close
+		- calls give_fdescriptor () which gives the pointer to the
+			place where it lies
+		- then close the file with file_close (), remove from fd_list
+			this pointer's list_elem & free this memory
+
+	--------------------- start Function -------
+	{
+	  uint32_t *user_esp = f->esp;
+	  size_t size_int = sizeof (int *);
+
+	  // check for the validity of the Stack Pointer
+	  // before calling anything because the thread_current ()
+	  // rounds down the value of esp to guess the struct thread *
+	  check_pointer (user_esp);
+
+	  // get the struct thread for calling process
+	  struct thread *t = thread_current ();
+
+	  uint32_t syscall_no = *user_esp;
+
+	  // pop the value off the stack
+	  user_esp++;
+
+	  switch (syscall_no) {
+	    case SYS_HALT:
+		/* Halt the operating system. */
+		printf ("Halt is called\n");
+		power_off ();
+		break;
+
+	    case SYS_EXIT: {
+		/* Terminate this process. */
+		check_pointer (user_esp);
+		uint32_t ret_value = *user_esp;
+	  	user_esp++;
+	
+		exit_handler (ret_value);
+		break;
+		}
+
+	    case SYS_EXEC: {
+		/* Start another process. */
+		check_pointer (user_esp);
+		const char *cmd_line = *user_esp;
+		user_esp++;
+	
+		if (is_ptr_valid (cmd_line)) {
+	                lock_acquire (&filesys_lock);
+        	        f->eax = process_execute (cmd_line);
+	                lock_release (&filesys_lock);
+	        }
+
+		else f->eax = -1;
+	
+		break;
+		}
+
+	    case SYS_WAIT: {
+		/* Wait for a child process to die. */
+		check_pointer (user_esp);
+		tid_t child_tid = *user_esp;
+		user_esp++;
+
+		f->eax = process_wait (child_tid);
+		break;
+		}
+
+	    case SYS_CREATE: {
+		/* Create a file. */
+		check_pointer (user_esp);
+		const char *file_name = *user_esp;
+		user_esp++;
+		
+		check_pointer (user_esp);
+		size_t initial_size = *user_esp;
+		user_esp++;
+
+		check_pointer (file_name);
+	
+		lock_acquire (&filesys_lock);
+		f->eax = filesys_create (file_name, initial_size);
+		lock_release (&filesys_lock);
+
+		break;
+		}
+
+	    case SYS_REMOVE: {
+		/* Delete a file. */
+		check_pointer (user_esp);
+		const char *file_name = *user_esp;
+		user_esp++;
+	
+		check_pointer (file_name);
+
+		lock_acquire (&filesys_lock);
+		f->eax = filesys_remove (file_name);
+		lock_release (&filesys_lock);
+	
+		break;
+		}
+
+	    case SYS_OPEN: {
+		/* Open a file. */
+		check_pointer (user_esp);
+		const char *file_name = *user_esp;
+		user_esp++;
+	
+		check_pointer (file_name);
+	
+	        lock_acquire (&filesys_lock);
+	        f->eax = open_handler (file_name);
+	        lock_release (&filesys_lock);
+
+        	break;
+		}
+
+	    case SYS_FILESIZE: {
+	        /* Obtain a file's size. */
+        	check_pointer (user_esp);
+	        int fd = *user_esp;
+        	user_esp++;
+
+	        struct file *fp = search_fd_list (fd);
+	        if (!fp) {
+        	        printf ("No such file found in fd_list\n");
+                	f->eax = -1;
+	        }
+
+        	else {
+                	lock_acquire (&filesys_lock);
+	                f->eax = file_length (fp);
+        	        lock_release (&filesys_lock);
+	        }
+
+        	break;
+        	}
+
+	    case SYS_READ: {
+        	/* Read from a file. */
+	        check_pointer (user_esp);
+        	int fd = *user_esp;
+	        user_esp++;
+
+        	// reading from STDIN (usually keyboard)
+	        if (fd == STDIN_FILENO) {
+	                f->eax = input_getc ();
+        	}
+
+	        else {
+	                check_pointer (user_esp);
+	                char *buffer = *user_esp;
+        	        user_esp++;
+
+                	// check the validity of the user pointer
+	                check_pointer (buffer);
+
+        	        check_pointer (user_esp);
+                	unsigned size = *user_esp;
+	                user_esp++;
+
+        	        struct file *fp = search_fd_list (fd);
+                	if (!fp) {
+	                        exit_handler (-1);
+        	        }
+
+                	else {
+                        	lock_acquire (&filesys_lock);
+	                        f->eax = file_read (fp, buffer,size);
+        	                lock_release (&filesys_lock);
+                	}
+        	}
+
+	        break;
+	        }
+
+	    case SYS_WRITE: {
+		/* Write to a file. */
+	        check_pointer (user_esp);
+	        int fd = *user_esp;
+	        user_esp++;
+
+        	check_pointer (user_esp);
+	        char *buffer = *user_esp;
+	        user_esp++;
+
+        	// check the validity of the user pointer
+	        check_pointer (buffer);
+
+	        check_pointer (user_esp);
+	        uint32_t size = *user_esp;
+        	user_esp++;
+
+	        if (fd == STDOUT_FILENO)
+        	        putbuf (buffer, size);
+
+	        // currently writing to STDIN kills the thread
+        	else {
+                	struct file *fp = search_fd_list (fd);
+	                if (!fp) {
+        	                exit_handler (-1);
+	                }
+
+        	        else {
+                	        lock_acquire (&filesys_lock);
+                        	f->eax = file_write (fp, buffer,size);
+	                        lock_release (&filesys_lock);
+        	        }
+	        }
+
+		break;
+		}
+
+	    case SYS_SEEK: {
+	        /* Change position in a file. */
+	        check_pointer (user_esp);
+	        int fd = *user_esp;
+	        user_esp++;
+
+        	check_pointer (user_esp);
+	        uint32_t pos = *user_esp;
+	        user_esp++;
+
+        	struct file *fp = search_fd_list (fd);
+	        if (!fp) {
+	                exit_handler (-1);
+        	}
+
+	        else {
+        	        lock_acquire (&filesys_lock);
+	                file_seek (fp, pos);
+	                lock_release (&filesys_lock);
+	        }
+
+        	break;
+	        }
+
+	    case  SYS_TELL: {
+        	/* Report current position in a file. */
+	        check_pointer (user_esp);
+        	int fd = *user_esp;
+	        user_esp++;
+
+        	struct file *fp = search_fd_list (fd);
+	        if (!fp) {
+        	        exit_handler (-1);
+	        }
+
+        	else {
+	                lock_acquire (&filesys_lock);
+        	        f->eax = file_tell (fp);
+	                lock_release (&filesys_lock);
+	        }
+
+        	break;
+	        }
+
+	    case SYS_CLOSE:
+        	/* Close a file. */
+	        check_pointer (user_esp);
+        	int fd = *user_esp;
+	        user_esp++;
+
+        	struct file_descriptor *fdptr = give_fdescriptor (fd);
+	        if (!fdptr) {
+        	        exit_handler (-1);
+	        }
+
+        	else {
+	                lock_acquire (&filesys_lock);
+	                file_close (fdptr->fp);
+	                lock_release (&filesys_lock);
+
+	                f->eax = list_remove (&fdptr->elem);
+        	        free (fdptr);
+	        }
+
+        	break;
+		}
+	}
+	--------------------- end Function -------
+
+## thread.c
+void
+thread_exit (void)
+	- apart from the initial functioning, it also deletes the
+		children list & frees the memory allocated to it via
+		malloc
+	--------------------- start Function -------
+	{
+	  --
+	  --
+	  // empty the children list
+	  struct list *children = &thread_current ()->children; 
+	  struct list_elem *e;
+
+	  while (!list_empty (children)) {
+	    e = list_pop_front (children);
+	    struct child_info *ichild = list_entry (e, struct child_info, elem);
+	    free (ichild);
+	  }
+	  --
+	  --
+	}
+	--------------------- end Function -------
+
+
+--	RATIONALE
+		- There is a trade-off between the simple implementation of
+			check_pointer () & the huge number of places where
+			it's been called, instead the other solution for
+			pointer validity checking as given in the book is to
+			handle the page fault.
+			That will be much less of headache but will be
+			somewhat complex, i'll do that some time later
+		- Is there really any need of having parent pointer in the
+			thread structure ?? Otherwise any process can
+			mislead the parent & create some problems.
+			Need to think over it.
+		- Initial (main) thread calls process_execute without holding
+			filesys_lock but start_process uses file_deny_write ()
+			& open_handler () (both access filesys code with acquiring
+			the lock). Any user process accesses the filesys code
+			after acquiring the lock but the kernel processes do
+			not follow this strategy. This may create problems in
+			future. What can be done ??
+--
