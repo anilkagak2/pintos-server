@@ -644,7 +644,9 @@ setup_stack (void **esp)
     // cannot go beyond this memory location
     t->user_stack_limit = upage;
     // maximum number of stack pages left to be allocated to this process
-    t->num_stack_pages_left = 31;  // 1 is allocated here
+    //t->num_stack_pages_left = 31;  // 1 is allocated here
+    t->num_stack_pages_left = 63;  // 1 is allocated here
+//printf (" allocated stack page %p stack pages left %d\n", upage, t->num_stack_pages_left);
 
     return true;
   }

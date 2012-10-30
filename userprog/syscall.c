@@ -129,7 +129,8 @@ stack_check (uint8_t *esp)
     uint8_t *limit = cur->user_stack_limit;
     int pages_left = cur->num_stack_pages_left;
 
-   ASSERT (pages_left <= 31 && pages_left >= 0);
+  // ASSERT (pages_left <= 31 && pages_left >= 0);
+   ASSERT (pages_left <= 63 && pages_left >= 0);
 
  // printf ("user stack limit is %p & accessed esp is %p\n",limit,esp);
     if (esp <= limit && esp >= limit - pages_left * PGSIZE) {

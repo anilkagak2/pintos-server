@@ -171,14 +171,16 @@ page_fault (struct intr_frame *f)
   uint8_t *limit = cur->user_stack_limit;
   size_t pages_left = cur->num_stack_pages_left;
 
-  ASSERT (pages_left <= 31 && pages_left >= 0);
+  //ASSERT (pages_left <= 31 && pages_left >= 0);
+  ASSERT (pages_left <= 63 && pages_left >= 0);
 
-//  printf ("fault address %p thread %s limit is %p\n", fault_addr, thread_current ()->name,limit);
+//  printf ("fault address %p thread %d limit is %p limit-pages_left %p\n", fault_addr, thread_current ()->tid,limit, limit - pages_left * PGSIZE);
   if (f->esp <= limit && f->esp >= limit - pages_left * PGSIZE) {
     if (!stack_check (f->esp)) {
        exit_handler (-1);
     }
 
+//  printf (" allocated stack pages to fault address %p thread %d limit is %p\n", fault_addr, thread_current ()->tid,limit);
    return;
   }
 
@@ -200,7 +202,7 @@ page_fault (struct intr_frame *f)
   }
 
   if (is_frame_table_lock_acquired ()) {
-	printf ("%d is helding the frame table lock...\n",thread_current ()->tid);
+//	printf ("%d is helding the frame table lock...\n",thread_current ()->tid);
 	release_frame_table_lock ();
 	exit_handler (-122);
   }
@@ -213,7 +215,7 @@ page_fault (struct intr_frame *f)
 
   // invalid access
   if (!p) {
-//    printf ("fault address is %p & esp is %p & thread name is %d\n",fault_addr,f->esp,thread_current ()->tid);
+//    printf ("fault address is %p & esp is %p & thread is %d limit is %p\n",fault_addr,f->esp,cur->tid,limit);
     exit_handler (-1);
   }
 
@@ -259,18 +261,6 @@ page_fault (struct intr_frame *f)
 		}
 
 		file_seek (f, p->file_ofs);
-
-		/*uint8_t *kpage = allocator_get_page (upage, IN_FILE);
-		if (kpage == NULL) {
-			file_close (f);
-
-			// if you acquired the lock here then release it
-			if (release_lock)
-			        lock_release (&filesys_lock);
-
-		//	exit_handler (-1);
-			exit_handler (-2);
-		} */
 
 		int page_read_bytes = p->read_bytes;
 		if (file_read (f, kpage, page_read_bytes) != (int) page_read_bytes)
