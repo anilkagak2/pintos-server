@@ -9,9 +9,15 @@
 
 #include "filesys/file.h"
 #include "filesys/filesys.h"
-#include "threads/palloc.h"
+//#include "threads/palloc.h"
+#include "threads/malloc.h"
 #include "pagedir.h"
 #include "process.h"
+#include "vm/page.h"
+#include "vm/frame.h"
+#include "vm/swap.h"
+#include <string.h>
+#include <hash.h>
 
 static void syscall_handler (struct intr_frame *);
 
@@ -39,31 +45,24 @@ bool is_ptr_valid (void *ptr)
 }
 
 bool
-allocate_zeroed_page (void *upage) {
-	uint8_t *kpage = allocator_get_page ();
-
-	if (kpage == NULL)
-		return false;
-
-	memset (kpage, 0, PGSIZE);
-
-	/* Add the page to the process's address space. */
-	if (!install_page (upage, kpage, true)) 
-	{
-		allocator_free_page (kpage);
-		return false;
+allocate_zeroed_page (void *upage)
+{
+	// check for the presence of upage in supplementary page table
+	// if yes check that the p->kpage == NULL & hence allocate a kpage
+	struct thread *cur = thread_current ();
+  lock_acquire (&cur->supplement_lock);
+	struct page *p = supplementary_lookup (cur, upage);
+  lock_release (&cur->supplement_lock);
+	if (p) {
+		ASSERT (p->kpage == NULL);
+		// writable
+		if(!allocator_get_page (upage, ALL_ZERO_I,true))
+		  return false;
+		return true;	
 	}
 
-	// adding the page entry to supplemental page table
-	else {
-		// update supplemental page table
-//printf ("allocating upage %p at kpage %p\n",upage, kpage);
-		supplementary_insert (upage, "", 0, 0, true, ALL_ZERO);
-		supplementary_insert_kpage (upage, kpage);
-
-		// update frame table
-		allocator_insert_upage (kpage, upage);
-	}
+	if(!allocator_get_page (upage, ALL_ZERO, true))
+	  return false;
 	return true;
 }
 
@@ -76,16 +75,38 @@ bool is_buffer_valid (void *ptr)
   else {
     // if page mapping is absent in page directory
     // you need to allocate a page for this & create a mapping for it
-    if (!pagedir_get_page (thread_current ()->pagedir, ptr)) {
-/*	if (!allocate_zeroed_page (pg_round_down (ptr)))
-		exit_handler (-1); */
-	return false;
-    } 
 
-    struct page *p = supplementary_lookup (thread_current (), pg_round_down (ptr));
-    if (!p) return false;	// should be ASSERT
-    else if (!p->writable) return false;
-    else return true;
+  void *upage = pg_round_down (ptr);
+  struct thread *cur = thread_current ();
+  lock_acquire (&cur->supplement_lock);
+    struct page *p = supplementary_lookup (thread_current (), upage);
+  lock_release (&cur->supplement_lock);
+
+  // no such page exists in thread's supplementary table
+  if (!p) {
+//    printf ("upage %p doesn't exists in thread's supplementary table\n",upage);
+    exit_handler (-1);
+  }
+
+  else if (p->kpage) {
+    // is the page writable??
+    if (p->writable) return true;
+    else return false;
+  }
+
+  else {
+    if (!allocate_zeroed_page (upage)) exit_handler (-1);
+    return true;
+  }
+
+/*    if (!pagedir_get_page (thread_current ()->pagedir, ptr)) {
+	if (!allocate_zeroed_page (upage))
+		exit_handler (-1);
+//	printf ("no such page %p is mapped to pagedir: %p\n",ptr,thread_current ()->pagedir);
+//	return false;
+    }
+
+    return true; */
   }
 }
 
@@ -106,7 +127,6 @@ stack_check (uint8_t *esp)
   else {
     struct thread *cur = thread_current ();
     uint8_t *limit = cur->user_stack_limit;
-    //size_t pages_left = cur->num_stack_pages_left;
     int pages_left = cur->num_stack_pages_left;
 
    ASSERT (pages_left <= 31 && pages_left >= 0);
@@ -143,7 +163,6 @@ static void
 syscall_handler (struct intr_frame *f) 
 {
   uint32_t *user_esp = f->esp;
-  size_t size_int = sizeof (int *);
 
   // check the user stack growth possibility
 //  if (!stack_check ( (uint8_t *) user_esp))
@@ -157,7 +176,7 @@ syscall_handler (struct intr_frame *f)
   check_pointer (user_esp);
 
   // get the struct thread for calling process
-  struct thread *t = thread_current ();
+  //struct thread *t = thread_current ();
 
   uint32_t syscall_no = *user_esp;
 
@@ -505,9 +524,9 @@ void exit_handler (int ret_value) {
 	/* Terminate this process. */
 	struct thread *t = thread_current ();
 	printf ("%s: exit(%d)\n",t->name, ret_value);
+//	printf ("%s %d: exit(%d)\n",t->name,t->tid, ret_value);
 
 	// child info
-	//struct child_info *ichild = get_parents_child_info (t->tid);
 	struct child_info *ichild = get_parents_child_info ();
 
 	// you should add this if (ichild) check may be parent dies before

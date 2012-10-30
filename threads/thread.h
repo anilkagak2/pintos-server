@@ -132,16 +132,13 @@ struct thread
     struct thread *parent;		/* Parent's thread pointer. */
     struct list fd_list;		/* List of file descriptors of thread. */
     int fd_to_allot;			/* File descriptor number to be allotted. */
-    //struct thread *waiting_on_child;	/* Child for which the thread is waiting. */
-
     struct hash supplement_pt;		/* Supplementary Page Table. */
+
+    struct lock supplement_lock;	/* Lock for accessing supplementary page table.
+					   Others also change the spte, so need a lock for synch. */
     uint8_t *user_stack_limit;		/* Till this the user stack can be accessed without growing. */
-    //size_t num_stack_pages_left;	/* Number of stack pages which can be allocated
-//					   (Limit is 32 = 128KB stack size). */
     int num_stack_pages_left;		/* Number of stack pages which can be allocated
 					   (Limit is 32 = 128KB stack size). */
-
-
 #endif
 
     /* Owned by thread.c. */

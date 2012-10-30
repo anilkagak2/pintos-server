@@ -213,10 +213,15 @@ void
 lock_acquire (struct lock *lock)
 {
   ASSERT (lock != NULL);
+
+  struct thread *t = thread_current ();
+  if (lock->holder == t) {
+  printf ("Lock holder: %d & current thread: %d & lock %p & supplementlock %p\n",lock->holder->tid, t->tid,lock,&t->supplement_lock);
+  }
+
   ASSERT (!intr_context ());
   ASSERT (!lock_held_by_current_thread (lock));
 
-  struct thread *t = thread_current ();
   enum intr_level old_level;
   
   old_level = intr_disable ();
@@ -299,6 +304,10 @@ void
 lock_release (struct lock *lock) 
 {
   //printf ("Lock holder: %s & current thread: %s\n",lock->holder->name, thread_current ()->name);
+/*  if (lock->holder != thread_current ()) {
+  printf ("Lock holder: %d & current thread: %d & lock %p\n",lock->holder->tid, thread_current ()->tid,lock);
+  }*/
+
   ASSERT (lock != NULL);
   ASSERT (lock_held_by_current_thread (lock));
 

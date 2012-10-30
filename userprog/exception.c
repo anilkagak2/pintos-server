@@ -8,6 +8,9 @@
 #include "userprog/syscall.h"
 #include "threads/palloc.h"
 #include "threads/vaddr.h"
+#include "vm/frame.h"
+#include "vm/page.h"
+#include "vm/swap.h"
 
 /* Number of page faults processed. */
 static long long page_fault_cnt;
@@ -152,6 +155,17 @@ page_fault (struct intr_frame *f)
   write = (f->error_code & PF_W) != 0;
   user = (f->error_code & PF_U) != 0;
 
+  if (!not_present && write) {
+//    printf ("Present & write at %p\n",fault_addr);
+    exit_handler (-1);
+  }
+
+/*  bool was_acquired = lock_held_by_current_thread (&filesys_lock);
+  if (was_acquired) {
+    printf ("Filesys lock held at the start of page fault by %d\n", thread_current ()->tid);
+    lock_release ("");
+  } */
+
 // was the fault caused because of stack access past the limit?
   struct thread *cur = thread_current ();
   uint8_t *limit = cur->user_stack_limit;
@@ -160,11 +174,6 @@ page_fault (struct intr_frame *f)
   ASSERT (pages_left <= 31 && pages_left >= 0);
 
 //  printf ("fault address %p thread %s limit is %p\n", fault_addr, thread_current ()->name,limit);
-//  if (fault_addr <= limit && fault_addr >= limit - 32) {
-// PUSH(4) & PUSHA (32)
-//  if (f->esp <= limit && f->esp >= limit - 32)
-
-  //if (f->esp <= limit && f->esp >= limit -PGSIZE) {
   if (f->esp <= limit && f->esp >= limit - pages_left * PGSIZE) {
     if (!stack_check (f->esp)) {
        exit_handler (-1);
@@ -172,9 +181,8 @@ page_fault (struct intr_frame *f)
 
    return;
   }
-  //if (fault_addr == f->esp - 4 ||  fault_addr == f->esp - 32) {
+
   if (fault_addr <= f->esp - 4 &&  fault_addr >= f->esp - 32) {
-//  if (fault_addr <= limit && fault_addr >= limit - PGSIZE) {
     if (!stack_check (f->esp)) {
       exit_handler (-1);
     }
@@ -185,157 +193,128 @@ page_fault (struct intr_frame *f)
   // if page fault caused by user access to invalid page should check for
   // the validity of page may be NULL was referenced or a valid page was
   // referenced, will be implemented in Virtual Memory
-  if (user) {
-
-//    if(fault_addr == PHYS_BASE) return;
-/*    if (f->esp == PHYS_BASE) {
-      f->esp = PHYS_BASE - 1;
-      return;
-    }  */
-
-   if (!is_user_vaddr (fault_addr)) {
-     printf ("fault address is %p & esp is %p & phys_base is %p\n",fault_addr,f->esp,PHYS_BASE);
+  if (!is_user_vaddr (fault_addr)) {
+//     printf ("fault address is %p & esp is %p & phys_base is %p\n",fault_addr,f->esp,PHYS_BASE);
       exit_handler (-1);
-   }
+  //    exit_handler (-9);
+  }
 
-//    struct page *p = supplementary_lookup (fault_addr);
+  if (is_frame_table_lock_acquired ()) {
+	printf ("%d is helding the frame table lock...\n",thread_current ()->tid);
+	release_frame_table_lock ();
+	exit_handler (-122);
+  }
+
 // convert the fault_addr to a page
-//    printf ("fault address %p \n", fault_addr);
-    struct page *p = supplementary_lookup (thread_current (), pg_round_down (fault_addr));
+//  printf ("fault address %p \n", fault_addr);
+  lock_acquire (&cur->supplement_lock);
+  struct page *p = supplementary_lookup (thread_current (), pg_round_down (fault_addr));
+  lock_release (&cur->supplement_lock);
 
-    // invalid access
-    if (!p) {
-      printf ("fault address is %p & esp is %p & thread name is %s\n",fault_addr,f->esp,thread_current ()->name);
-      exit_handler (-1);
-    }
+  // invalid access
+  if (!p) {
+//    printf ("fault address is %p & esp is %p & thread name is %d\n",fault_addr,f->esp,thread_current ()->tid);
+    exit_handler (-1);
+  }
 
-    uint32_t *upage = p->upage;
+  // writing a read only page
+/*  if (!p->writable && write) {
+    printf ("Writing a read only page\n");
+    exit_handler (-1);
+  } */
+
+  uint32_t *upage = p->upage;
 
     // otherwise the page is in thread's page table but not in memory
     // need to load it in memory
     // need to get a free frame for allocating to this page
     switch (p->page_type) {
 	case IN_MEMORY:
-		allocator_dummy ();
 		printf ("Not done yet\n");
 		break;
 
 	case IN_FILE: {
-ASSERT (!p->is_present);
-		lock_acquire (&filesys_lock);
-		struct file *f = filesys_open (p->file_name);
-
-		file_seek (f, p->file_ofs);
-
-		uint8_t *kpage = allocator_get_page ();
-
+		uint8_t *kpage = allocator_get_page (upage, IN_FILE, p->writable);
 		if (kpage == NULL) {
-			lock_release (&filesys_lock);
-			file_close (f);
-			//exit_handler (-1);
+		//	exit_handler (-1);
 			exit_handler (-2);
 		}
 
-		int page_read_bytes = p->read_bytes;
+		bool release_lock = false;
+		if (!lock_held_by_current_thread (&filesys_lock)) {
+		        release_lock = true;
+		        lock_acquire (&filesys_lock);
+		}
 
+		struct file *f = filesys_open (p->file_name);
+ 		if (!f) {
+			allocator_free_page (kpage);
+			printf ("thread %d could not open the file %s in page fault\n", thread_current ()->tid, p->file_name);
+			// if you acquired the lock here then release it
+			if (release_lock)
+			        lock_release (&filesys_lock);
+
+		//	exit_handler (-1);
+			exit_handler (-2);
+		}
+
+		file_seek (f, p->file_ofs);
+
+		/*uint8_t *kpage = allocator_get_page (upage, IN_FILE);
+		if (kpage == NULL) {
+			file_close (f);
+
+			// if you acquired the lock here then release it
+			if (release_lock)
+			        lock_release (&filesys_lock);
+
+		//	exit_handler (-1);
+			exit_handler (-2);
+		} */
+
+		int page_read_bytes = p->read_bytes;
 		if (file_read (f, kpage, page_read_bytes) != (int) page_read_bytes)
 	        {
 			allocator_free_page (kpage);
-			lock_release (&filesys_lock);
 			file_close (f);
-			//exit_handler (-1);
+
+			// if you acquired the lock here then release it
+			if (release_lock)
+			        lock_release (&filesys_lock);
+
+		//	exit_handler (-1);
 			exit_handler (-2);
 		}
 
 		memset (kpage + page_read_bytes, 0, PGSIZE - page_read_bytes);
-
-		/* Add the page to the process's address space. */
-		if (!install_page (upage, kpage, p->writable)) 
-		{
-			allocator_free_page (kpage);
-			lock_release (&filesys_lock);
-			file_close (f);
-			//exit_handler (-1);
-			exit_handler (-2);
-		}
-
-		// adding the page entry to supplemental page table
-		else {
-			// update supplemental page table
-			//supplementary_insert_kpage (upage, kpage);
-			p->kpage = kpage;
-			p->is_present = true;
-
-			// update frame table
-			allocator_insert_upage (kpage, upage);
-		}
-
 		file_close (f);
-		lock_release (&filesys_lock);
+
+		// if you acquired the lock here then release it
+		if (release_lock)
+		        lock_release (&filesys_lock);
 		break;
 	}
 
 	case IN_SWAP: {
-printf ("In swap slot\n");
-ASSERT (!p->is_present);
+//printf ("In swap slot\n");
 		// read the page from swap after getting a free frame
-		uint8_t *kpage = allocator_get_page ();
+		uint8_t *kpage = allocator_get_page (upage, IN_SWAP, p->writable);
 
 		if (kpage == NULL) {
 			//exit_handler (-1);
 			exit_handler (-4);
 		}
-		
-		memset (kpage, 0, PGSIZE);
-
-//		pagedir_set_page (thread_current ()->pagedir, upage, kpage, p->writable);
-		/* Add the page to the process's address space. */
-		if (!install_page (upage, kpage, p->writable)) 
-		{
-			allocator_free_page (kpage);
-			//exit_handler (-1);
-			exit_handler (-4);
-		}
-
-		p->kpage = kpage;
-		p->is_present = true;
-
-		// update frame table
-		allocator_insert_upage (kpage, upage);
-
-		// read from the swap slot & free the swap slot
-		//swap_read_and_free (p->sector, kpage);
-		swap_read_and_free (p->sector, upage);
-
-		p->sector = SECTOR_ERROR;
-		p->page_type = IN_MEMORY;
 		break;
 	}
 
 	case ALL_ZERO: {
-		uint8_t *kpage = allocator_get_page ();
+// ALL_ZERO_I is a dummy type to differ between suppelementary entries
+// which are available in table & which needs to be allocated space
+		uint8_t *kpage = allocator_get_page (upage, ALL_ZERO_I, p->writable);
 
-		if (kpage == NULL)
+		if (kpage == NULL) {
 			//exit_handler (-1);
 			exit_handler (-3);
-
-		memset (kpage, 0, PGSIZE);
-
-		/* Add the page to the process's address space. */
-		if (!install_page (upage, kpage, p->writable)) 
-		{
-			allocator_free_page (kpage);
-			//exit_handler (-1);
-			exit_handler (-3);
-		}
-
-		// adding the page entry to supplemental page table
-		else {
-			// update supplemental page table
-			supplementary_insert_kpage (upage, kpage);
-
-			// update frame table
-			allocator_insert_upage (kpage, upage);
 		}
 		break;
 	}
@@ -346,14 +325,16 @@ ASSERT (!p->is_present);
 
     // clear the accessed bit of the page
     pagedir_set_accessed (thread_current ()->pagedir, upage, false);
-  }
+//    lock_release (&cur->supplement_lock);
+//  } 
 
 // kernel page fault
 // should be a patch for pt-write-code2, need to some other hack for it
-  else {
+/*  else {
     printf ("kernel page fault: address %p\n", fault_addr);
-    exit_handler (-1);
-  }
+    //exit_handler (-1);
+    exit_handler (-10);
+  } */
 
   /* To implement virtual memory, delete the rest of the function
      body, and replace it with code that brings in the page to
