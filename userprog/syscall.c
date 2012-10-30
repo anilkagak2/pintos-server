@@ -16,9 +16,6 @@ int open_handler (const char *file);
 struct file * search_fd_list (int fd);
 struct file_descriptor *give_fdescriptor (int fd);
 
-// lock for accessing the filesys code
-//static struct lock filesys_lock;
-
 void
 syscall_init (void) 
 {
@@ -34,27 +31,18 @@ bool is_ptr_valid (void *ptr)
   else if (!is_user_vaddr (ptr)) return false;
   else if (!pagedir_get_page (thread_current ()->pagedir, ptr)) return false;
   else return true;
-
-//  return (ptr != NULL && is_user_vaddr (ptr) && 
-//		pagedir_get_page (thread_current ()->pagedir, ptr));
 }
 
 void check_pointer (void *ptr)
 {
   if (!is_ptr_valid (ptr)) {
-//    printf ("%s: exit(%d)\n",thread_current ()->name, -1);
-//    thread_exit ();
-//      exit (-1);
      exit_handler (-1);
   }
 }
 
 static void
-//syscall_handler (struct intr_frame *f UNUSED) 
 syscall_handler (struct intr_frame *f) 
 {
-//  printf ("system call!\n");
-
   uint32_t *user_esp = f->esp;
   size_t size_int = sizeof (int *);
 
@@ -340,7 +328,6 @@ syscall_handler (struct intr_frame *f)
 }
 
 struct child_info *
-//get_parents_child_info (tid_t tid)
 get_parents_child_info ()
 {
   struct thread *cur = thread_current ();
@@ -382,10 +369,12 @@ void exit_handler (int ret_value) {
 	//struct child_info *ichild = get_parents_child_info (t->tid);
 	struct child_info *ichild = get_parents_child_info ();
 
-//	if (ichild) {
+	// you should add this if (ichild) check may be parent dies before
+	// child
+	if (ichild) {
 		ichild->return_value = ret_value;
 		ichild->child = NULL;
-//	}
+	}
 
 	// may be if ichild concept works, you'll not be in need of this
 	// field in struct thread
@@ -442,7 +431,6 @@ int open_handler (const char *file_name)
 
   // could not open the file
   if (!fp) return -1;
-  	//f->eax = -1;
 
   else
   {
@@ -452,7 +440,6 @@ int open_handler (const char *file_name)
     {
 	printf ("Cannot allocate memory to file descriptor pointer\n");
 	file_close (fp);
-//	f->eax = -1;
 	return -1;
     }	
 
@@ -464,7 +451,6 @@ int open_handler (const char *file_name)
 	// it's a fault to use list_insert here (Why??)
 	//list_insert (&t->fd_list, &fdptr->elem);
 	list_push_back (&t->fd_list, &fdptr->elem);
-	//f->eax = fdptr->fd;
 	return fdptr->fd;
     }
   }

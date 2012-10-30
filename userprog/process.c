@@ -30,9 +30,6 @@ static char ** cmd_token (char *cmdline, void *aux);
 tid_t
 process_execute (const char *file_name) 
 {
-//  if (!is_ptr_valid (file_name))
-//	return TID_ERROR;
-
   char *fn_copy;
   tid_t tid;
 
@@ -46,18 +43,12 @@ process_execute (const char *file_name)
   struct semaphore sema;
   sema_init (&sema,0);
 
-  //char **kargv = cmd_token (fn_copy);
   char **kargv = cmd_token (fn_copy,(void *)&sema);
 
   /* Create a new thread to execute FILE_NAME. */
-  //tid = thread_create (file_name, PRI_DEFAULT, start_process, fn_copy);
-  //tid = thread_create (file_name, PRI_DEFAULT, start_process, kargv);
   tid = thread_create (kargv[0], PRI_DEFAULT, start_process, kargv);
   if (tid == TID_ERROR)
-    //palloc_free_page (fn_copy); 
     palloc_free_page (kargv[0]); 
-//  else
-//    thread_yield ();
 
   // wait for the child to load it's executable
   else
@@ -108,10 +99,8 @@ cmd_token (char *cmdline, void *aux)
 /* A thread function that loads a user process and starts it
    running. */
 static void
-//start_process (void *file_name_)
 start_process (void *kargv)
 {
- // char *file_name = file_name_;
   ASSERT (is_kernel_vaddr (kargv));
   char **argv = (char **)kargv;
   uintptr_t ptr = vtop (kargv);
@@ -145,7 +134,6 @@ start_process (void *kargv)
     file_deny_write (fp); 
   }
 
-//  success = load (file_name, &if_.eip, &if_.esp);
   success = load (argv[0], &if_.eip, &if_.esp);
 
   // let other process work with filesys code
@@ -196,14 +184,12 @@ start_process (void *kargv)
   }
 
   /* If load failed, quit. */
-  //palloc_free_page (file_name);
   palloc_free_page (argv[0]);
 
   // since argv is a static variable, i put the status of success  or failure
   // load () in this thread, at that place
   argv[0] = (char *)success;
   sema_up (sema);	// increment the sema's value on which process_execute was waiting
-  //sema_init (&thread_current ()->sema,0);	// initialize the semaphore for sychronizing wait
 
   if (!success) 
     thread_exit ();
@@ -237,16 +223,12 @@ process_wait (tid_t child_tid)
   bool childFound = false;
 
   struct list *children = &thread_current ()->children;
-//  struct thread *t;
   struct child_info *t;
 
   // traverse the children list for the thread child_tid
   for (e = list_begin (children); e != list_end (children); e = list_next (e)) {
 
-    // previous way of  organizing children list
-//    t = list_entry (e, struct thread, child_elem);
-
-    // currently children list contains dynamically allocated struct
+   // currently children list contains dynamically allocated struct
     t = list_entry (e, struct child_info, elem);
 
     if (t->tid == child_tid) {
@@ -255,26 +237,11 @@ process_wait (tid_t child_tid)
     }
   }
 
-/*  if (childFound) {
-//	if (t->status != THREAD_DYING)
-	sema_down (&t->parent_sema);
-	list_remove (e);
-	int32_t ret_val = t->ret_value;
-
-	// signal the thread to call thread_exit ()
-	sema_up (&thread_current ()->child_sema);
-	return ret_val;
-  }
-*/
-
-  // most probably is_thread (t->child) should yield False, if t->child is not a thread(??)
   if (childFound) {
     // child is still alive
-    //if (is_thread (t->child)) {
     if ( t->child != NULL ) {
 	sema_down (&t->child->parent_sema);
 	list_remove (e);
-	//int32_t ret_val = t->child->ret_value;
 	int32_t ret_val = t->return_value;
 
 	// should work without this if the ichild concept works fine
@@ -298,10 +265,8 @@ process_wait (tid_t child_tid)
     }
   }
 
-  // either killed by kernel or may be child_tid is not a child of current thread
+  // child_tid is not a child of current thread
   else return -1;
-
-  //return -1;
 }
 
 /* Free the current process's resources. */
@@ -613,14 +578,17 @@ load_segment (struct file *file, off_t ofs, uint8_t *upage,
       size_t page_zero_bytes = PGSIZE - page_read_bytes;
 
       /* Get a page of memory. */
-      uint8_t *kpage = palloc_get_page (PAL_USER);
+//      uint8_t *kpage = palloc_get_page (PAL_USER);
+      uint8_t *kpage = allocator_get_page ();
+
       if (kpage == NULL)
         return false;
 
       /* Load this page. */
       if (file_read (file, kpage, page_read_bytes) != (int) page_read_bytes)
         {
-          palloc_free_page (kpage);
+          //palloc_free_page (kpage);
+          allocator_free_page (kpage);
           return false; 
         }
       memset (kpage + page_read_bytes, 0, page_zero_bytes);
@@ -628,7 +596,8 @@ load_segment (struct file *file, off_t ofs, uint8_t *upage,
       /* Add the page to the process's address space. */
       if (!install_page (upage, kpage, writable)) 
         {
-          palloc_free_page (kpage);
+          //palloc_free_page (kpage);
+          allocator_free_page (kpage);
           return false; 
         }
 
@@ -648,14 +617,18 @@ setup_stack (void **esp)
   uint8_t *kpage;
   bool success = false;
 
-  kpage = palloc_get_page (PAL_USER | PAL_ZERO);
+//  kpage = palloc_get_page (PAL_USER | PAL_ZERO);
+  kpage = allocator_get_page ();
+  memset (kpage, 0, PGSIZE);
+
   if (kpage != NULL) 
     {
       success = install_page (((uint8_t *) PHYS_BASE) - PGSIZE, kpage, true);
       if (success)
         *esp = PHYS_BASE;
       else
-        palloc_free_page (kpage);
+        allocator_free_page (kpage);
+        //palloc_free_page (kpage);
     }
   return success;
 }

@@ -119,10 +119,15 @@ main (void)
   filesys_init (format_filesys);
 #endif
 
+  /* Initialize the user Frame Table. */
+  allocator_init ();
+
   printf ("Boot complete.\n");
   
   /* Run actions specified on kernel command line. */
   run_actions (argv);
+
+  allocator_exit ();
 
   /* Finish up. */
   if (reboot_when_done)

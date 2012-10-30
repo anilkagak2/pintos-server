@@ -187,3 +187,128 @@ page_from_pool (const struct pool *pool, void *page)
 
   return page_no >= start_page && page_no < end_page;
 }
+
+/* Frame Table Allocator Functions. */
+
+/* Hash function for the frame table.
+   Returns hash value for the frame. */
+unsigned
+allocator_hash (const struct hash_elem *e, void *aux UNUSED)
+{
+  const struct frame *f = hash_entry (e, struct frame, elem);
+  //return hash_bytes (&f->kpage, sizeof f->kpage);
+  return hash_bytes (&f->kpage, sizeof f->kpage);
+}
+
+/* Returns True if frame a precedes frame b. */
+bool
+allocator_less (const struct hash_elem *a_, const struct hash_elem *b_,
+			void *aux UNUSED)
+{
+  const struct frame *a = hash_entry (a_, struct frame, elem);
+  const struct frame *b = hash_entry (b_, struct frame, elem);
+
+  return a->kpage < b->kpage;
+}
+
+/* Initializes the frame table by calling
+   palloc_get_page (PAL_USER) till it returns NULL.
+   Allocates memory via malloc for holding info
+   about the frames for each successful call.
+   Also initializes the lock. */
+void
+allocator_init (void)
+{
+  hash_init (&frame_table, allocator_hash, allocator_less, NULL);
+  lock_init (&frame_table_lock);
+
+  lock_acquire (&frame_table_lock);
+
+  // request all the pages from the user pool & insert them in frame table
+  while (1)
+  {
+    // should you change the uint32_t to void ??
+    //uint32_t *kpage = (uint32_t *)palloc_get_page (PAL_USER);
+    void *kpage = palloc_get_page (PAL_USER);
+
+    // no more pages in user pool
+    if (!kpage)
+	break;
+
+    struct frame *f = (struct frame *) malloc (sizeof (struct frame));
+    if (!f)
+	PANIC ("Malloc cannot allocate memory for frame table\n");
+
+    // initialize the frame
+    f->kpage = kpage;
+    f->pte = NULL;
+    f->free = true;
+
+    // hash_insert () should return NULL, as there should not be any
+    // duplication of frame entry
+    ASSERT (!hash_insert (&frame_table, &f->elem));
+    printf ("No of hash table entries %d\n", hash_size (&frame_table));
+  }
+
+  lock_release (&frame_table_lock);
+}
+
+void
+allocator_destroy_elem (struct hash_elem *e,void *aux)
+{
+  struct frame *f = hash_entry (e, struct frame, elem);
+  free (f);
+}
+
+void
+allocator_exit ()
+{
+  lock_acquire (&frame_table_lock);
+  //hash_clear (&frame_table, allocator_destroy_elem);
+  hash_destroy (&frame_table, allocator_destroy_elem);
+  lock_release (&frame_table_lock);
+}
+
+/* Allocates a free frame to the requesting thread.
+   Currently panics the kernel if no free frame is available. */
+void *
+allocator_get_page ()
+{
+  lock_acquire (&frame_table_lock);
+
+  struct hash_iterator i;
+  hash_first (&i, &frame_table);
+
+  while (hash_next (&i)) {
+    struct frame *f = hash_entry (hash_cur (&i), struct frame, elem);
+    if (f->free) {
+	f->free = false;
+  	lock_release (&frame_table_lock);
+	return f->kpage;
+    }
+  }
+
+  lock_release (&frame_table_lock);
+  return NULL;
+}
+
+/* Frees a frame by enabling it's free bit in frame table. */
+void
+allocator_free_page (void *kpage)
+{
+  lock_acquire (&frame_table_lock);
+
+  struct frame f;
+  struct hash_elem *e;
+
+  f.kpage = kpage;
+
+  e = hash_find (&frame_table, &f.elem);
+  struct frame *fte = hash_entry (e, struct frame, elem);
+  fte->free = true;
+
+  lock_release (&frame_table_lock);
+}
+
+
+
