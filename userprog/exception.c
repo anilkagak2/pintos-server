@@ -6,6 +6,8 @@
 #include "threads/thread.h"
 
 #include "userprog/syscall.h"
+#include "threads/palloc.h"
+#include "threads/vaddr.h"
 
 /* Number of page faults processed. */
 static long long page_fault_cnt;
@@ -150,21 +152,146 @@ page_fault (struct intr_frame *f)
   write = (f->error_code & PF_W) != 0;
   user = (f->error_code & PF_U) != 0;
 
+// was the fault caused because of stack access past the limit?
+  uint8_t *limit = thread_current ()->user_stack_limit;
+//  if (fault_addr <= limit && fault_addr >= limit - 32) {
+// PUSH(4) & PUSHA (32)
+  if (fault_addr == f->esp - 4 ||  fault_addr == f->esp - 32) {
+//  if (fault_addr <= limit && fault_addr >= limit - PGSIZE) {
+    if (!stack_check (f->esp)) {
+      exit_handler (-1);
+    }
+
+    return;
+  }
+
   // if page fault caused by user access to invalid page should check for
   // the validity of page may be NULL was referenced or a valid page was
   // referenced, will be implemented in Virtual Memory
   if (user) {
-    exit_handler (-1);
+
+//    struct page *p = supplementary_lookup (fault_addr);
+// convert the fault_addr to a page
+//    printf ("fault address %p \n", fault_addr);
+    struct page *p = supplementary_lookup (pg_round_down (fault_addr));
+
+    // invalid access
+    if (!p) {
+      printf ("Invalid address is %p & esp is %p\n & thread name is %s",fault_addr,f->esp,thread_current ()->name);
+      exit_handler (-1);
+    }
+
+    uint32_t *upage = p->upage;
+
+    // otherwise the page is in thread's page table but not in memory
+    // need to load it in memory
+    // need to get a free frame for allocating to this page
+    switch (p->page_type) {
+	case IN_MEMORY:
+		printf ("No done yet\n");
+		break;
+
+	case IN_FILE: {
+		lock_acquire (&filesys_lock);
+		struct file *f = filesys_open (p->file_name);
+
+		file_seek (f, p->file_ofs);
+
+		uint8_t *kpage = allocator_get_page ();
+
+// cannot allocate memory
+		if (kpage == NULL) {
+			lock_release (&filesys_lock);
+			exit_handler (-1);
+		}
+
+		int page_read_bytes = p->read_bytes;
+
+		if (file_read (f, kpage, page_read_bytes) != (int) page_read_bytes)
+	        {
+			allocator_free_page (kpage);
+			lock_release (&filesys_lock);
+			file_close (f);
+			exit_handler (-1);
+		}
+
+		memset (kpage + page_read_bytes, 0, PGSIZE - page_read_bytes);
+
+		/* Add the page to the process's address space. */
+		if (!install_page (upage, kpage, p->writeable)) 
+		{
+			allocator_free_page (kpage);
+			lock_release (&filesys_lock);
+			file_close (f);
+			exit_handler (-1);
+		}
+
+		// adding the page entry to supplemental page table
+		else {
+			uint32_t *pte = pagedir_search_page (thread_current ()->pagedir, upage);
+			ASSERT (pte);
+
+			// update supplemental page table
+			supplementary_insert_kpage (upage, kpage);
+
+			// update frame table
+			allocator_insert_pte (kpage, pte);
+		}
+
+		file_close (f);
+		lock_release (&filesys_lock);
+		break;
+	}
+
+	case IN_SWAP:
+		break;
+
+	case ALL_ZERO: {
+		uint8_t *kpage = allocator_get_page ();
+
+		if (kpage == NULL)
+			exit_handler (-1);
+
+		memset (kpage, 0, PGSIZE);
+
+		/* Add the page to the process's address space. */
+		if (!install_page (upage, kpage, p->writeable)) 
+		{
+			allocator_free_page (kpage);
+			exit_handler (-1);
+		}
+
+		// adding the page entry to supplemental page table
+		else {
+			uint32_t *pte = pagedir_search_page (thread_current ()->pagedir, upage);
+			ASSERT (pte);
+
+			// update supplemental page table
+			supplementary_insert_kpage (upage, kpage);
+
+			// update frame table
+			allocator_insert_pte (kpage, pte);
+		}
+		break;
+	}
+
+	default:
+		printf ("Not defined page type in page fault\n");
+    }
   }
+
+// kernel page fault
+//  else
+//    kill (f);
 
   /* To implement virtual memory, delete the rest of the function
      body, and replace it with code that brings in the page to
      which fault_addr refers. */
-  printf ("Page fault at %p: %s error %s page in %s context.\n",
+/*  printf ("Page fault at %p: %s error %s page in %s context.\n",
           fault_addr,
           not_present ? "not present" : "rights violation",
           write ? "writing" : "reading",
           user ? "user" : "kernel");
-  kill (f);
+  kill (f); */
 }
 

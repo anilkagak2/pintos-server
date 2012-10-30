@@ -12,6 +12,9 @@
 #include "threads/synch.h"
 #include "threads/vaddr.h"
 
+#include "threads/thread.h"
+
+
 /* Page allocator.  Hands out memory in page-size (or
    page-multiple) chunks.  See malloc.h for an allocator that
    hands out smaller chunks.
@@ -247,7 +250,7 @@ allocator_init (void)
     // hash_insert () should return NULL, as there should not be any
     // duplication of frame entry
     ASSERT (!hash_insert (&frame_table, &f->elem));
-    printf ("No of hash table entries %d\n", hash_size (&frame_table));
+   // printf ("No of hash table entries %d\n", hash_size (&frame_table));
   }
 
   lock_release (&frame_table_lock);
@@ -283,6 +286,7 @@ allocator_get_page ()
     struct frame *f = hash_entry (hash_cur (&i), struct frame, elem);
     if (f->free) {
 	f->free = false;
+	f->pte = NULL;
   	lock_release (&frame_table_lock);
 	return f->kpage;
     }
@@ -304,11 +308,144 @@ allocator_free_page (void *kpage)
   f.kpage = kpage;
 
   e = hash_find (&frame_table, &f.elem);
+
+  if (!e) {
+    lock_release (&frame_table_lock);
+ //   printf ("Incorrect kpage value given\n");
+    return;
+  }
+
   struct frame *fte = hash_entry (e, struct frame, elem);
   fte->free = true;
+  fte->pte = NULL;
 
   lock_release (&frame_table_lock);
 }
 
+// initializes the frame's pte
+bool
+allocator_insert_pte (void *kpage, void *pte)
+{
+  struct frame f;
+  f.kpage = kpage;
 
+  lock_acquire (&frame_table_lock);
+  struct hash_elem *e = hash_find (&frame_table, &f.elem);
 
+  if (!e) {
+    lock_release (&frame_table_lock);
+//    printf ("Incorrect kpage value given\n");
+    return false;
+  }
+
+  struct frame *fp = hash_entry (e, struct frame, elem);
+  fp->pte = pte;
+
+  lock_release (&frame_table_lock);
+  return true;
+}
+
+/* Supplementary Page Table's access methods.*/
+
+/* Hash function for the frame table.
+   Returns hash value for the frame. */
+unsigned
+supplementary_hash (const struct hash_elem *e, void *aux UNUSED)
+{
+  const struct page *p = hash_entry (e, struct page, elem);
+  //return hash_bytes (&p->pte, sizeof p->pte);
+  return hash_bytes (&p->upage, sizeof p->upage);
+}
+
+/* Returns True if frame a precedes frame b. */
+bool
+supplementary_less (const struct hash_elem *a_, const struct hash_elem *b_,
+			void *aux UNUSED)
+{
+  const struct page *a = hash_entry (a_, struct page, elem);
+  const struct page *b = hash_entry (b_, struct page, elem);
+
+  //return a->pte < b->pte;
+  return a->upage < b->upage;
+}
+
+void
+supplementary_init (struct hash *spt)
+{
+  hash_init (spt, supplementary_hash, supplementary_less, NULL);
+}
+
+bool
+//supplementary_insert (uint32_t *pte, void *kpage, const char *file_name,
+supplementary_insert (void *upage, const char *file_name,
+			int32_t ofs,uint32_t read_bytes, bool writeable, enum page_type_t type)
+{
+  struct page *p = (struct page *) malloc (sizeof (struct page));
+
+  p->upage = upage;
+  p->kpage = NULL;
+  strlcpy (p->file_name, file_name, sizeof p->file_name);
+  p->file_ofs = ofs;
+  p->page_type = type;
+  p->read_bytes = read_bytes;
+  p->writeable = writeable;
+
+  hash_insert (&thread_current ()->supplement_pt, &p->elem);
+
+/*  if (type == ALL_ZERO)
+	printf ("Inserted SPT: %p n Type is %s\n", upage,"all_zero");
+  else if (type == IN_FILE)
+	printf ("Inserted SPT: %p n Type is %s\n", upage,"in_file"); */
+}
+
+void
+supplementary_destroy_elem (struct hash_elem *e,void *aux UNUSED)
+{
+  struct page *p = hash_entry (e, struct page, elem);
+  allocator_free_page (p->kpage);
+  free (p);
+}
+
+void
+supplementary_exit ()
+{
+  hash_destroy (&thread_current ()->supplement_pt, supplementary_destroy_elem);
+}
+
+struct page *
+supplementary_lookup (void *upage)
+{
+  struct thread *cur = thread_current ();
+  struct page _p;
+
+//  uint32_t *pte = pagedir_search_page (&cur->pagedir, upage);
+
+//  if (pte)
+//    _p.pte = pte;
+
+  _p.upage = upage;
+
+/*  else {
+    printf ("NO such upage is mapped to the thread's page table\n");
+    return NULL;
+  }*/
+
+  // lookup for page with pte as the above one
+  struct hash_elem *e = hash_find (&cur->supplement_pt, &_p.elem);
+
+  return e != NULL ? hash_entry (e, struct page, elem) : NULL;
+}
+
+bool
+supplementary_insert_kpage (void *upage, void *kpage)
+{
+  struct page *p = supplementary_lookup (upage);
+
+  if (p) {
+    p->kpage = kpage;
+    return true;
+  }
+
+  printf ("No such upage exists in supplementary page table\n");
+  return false;
+}

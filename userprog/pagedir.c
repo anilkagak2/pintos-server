@@ -41,7 +41,8 @@ pagedir_destroy (uint32_t *pd)
         
         for (pte = pt; pte < pt + PGSIZE / sizeof *pte; pte++)
           if (*pte & PTE_P) 
-            palloc_free_page (pte_get_page (*pte));
+            //palloc_free_page (pte_get_page (*pte));
+            allocator_free_page (pte_get_page (*pte));
         palloc_free_page (pt);
       }
   palloc_free_page (pd);
@@ -83,6 +84,12 @@ lookup_page (uint32_t *pd, const void *vaddr, bool create)
   /* Return the page table entry. */
   pt = pde_get_pt (*pde);
   return &pt[pt_no (vaddr)];
+}
+
+// calls lookup_page, wrapper for it
+uint32_t *pagedir_search_page (uint32_t *pd, const void *vaddr)
+{
+  return lookup_page (pd, vaddr, false);
 }
 
 /* Adds a mapping in page directory PD from user virtual page

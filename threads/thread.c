@@ -273,7 +273,8 @@ thread_unblock (struct thread *t)
 
   // current thread yields if the unblocked thread has higher priority
   // this function may be called within some external interrupt.
-  if ((thread_current ()->priority < t->priority) && thread_current () != idle_thread)
+  //if ((thread_current ()->priority < t->priority) && thread_current () != idle_thread)
+  if ((thread_current ()->priority < t->priority || thread_current ()->parent == t) && thread_current () != idle_thread)
   {
 	if (intr_context ())
 		intr_yield_on_return ();
@@ -616,6 +617,8 @@ init_thread (struct thread *t, const char *name, int priority)
   }
   else t->parent = NULL;
 
+  // cannot call malloc before initializing thread system
+//  supplementary_init (&t->supplement_pt);
 #endif
 
 //  list_init (&t->locks_waiting_on);

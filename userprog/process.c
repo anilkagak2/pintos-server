@@ -71,6 +71,7 @@ cmd_token (char *cmdline, void *aux)
 {
   ASSERT (aux != NULL);
 
+  //static char *argv[MAX_ARGS];
   static char *argv[MAX_ARGS];
   char *saveptr;
   int i=0;
@@ -107,6 +108,8 @@ start_process (void *kargv)
   struct intr_frame if_;
   bool success;
 
+  // initialize the supplementary page table for the thread
+  supplementary_init (&thread_current ()->supplement_pt);
 
   /* Initialize interrupt frame and load executable. */
   memset (&if_, 0, sizeof if_);
@@ -276,6 +279,9 @@ process_exit (void)
   struct thread *cur = thread_current ();
   uint32_t *pd;
 
+  /* Destroy the supplemental page table. */
+  supplementary_exit ();
+
   /* Destroy the current process's page directory and switch back
      to the kernel-only page directory. */
   pd = cur->pagedir;
@@ -375,9 +381,12 @@ struct Elf32_Phdr
 
 static bool setup_stack (void **esp);
 static bool validate_segment (const struct Elf32_Phdr *, struct file *);
+/*static bool load_segment (struct file *file, off_t ofs, uint8_t *upage,
+                          uint32_t read_bytes, uint32_t zero_bytes,
+                          bool writable);*/ 
 static bool load_segment (struct file *file, off_t ofs, uint8_t *upage,
                           uint32_t read_bytes, uint32_t zero_bytes,
-                          bool writable);
+                          bool writable, const char *file_name); 
 
 /* Loads an ELF executable from FILE_NAME into the current thread.
    Stores the executable's entry point into *EIP
@@ -472,10 +481,14 @@ load (const char *file_name, void (**eip) (void), void **esp)
                   read_bytes = 0;
                   zero_bytes = ROUND_UP (page_offset + phdr.p_memsz, PGSIZE);
                 }
+
+   //           if (!load_segment (file, file_page, (void *) mem_page,
+     //                            read_bytes, zero_bytes, writable))
               if (!load_segment (file, file_page, (void *) mem_page,
-                                 read_bytes, zero_bytes, writable))
+                                 read_bytes, zero_bytes, writable, file_name))
                 goto done;
             }
+
           else
             goto done;
           break;
@@ -499,7 +512,7 @@ load (const char *file_name, void (**eip) (void), void **esp)
 
 /* load() helpers. */
 
-static bool install_page (void *upage, void *kpage, bool writable);
+//static bool install_page (void *upage, void *kpage, bool writable);
 
 /* Checks whether PHDR describes a valid, loadable segment in
    FILE and returns true if so, false otherwise. */
@@ -561,16 +574,26 @@ validate_segment (const struct Elf32_Phdr *phdr, struct file *file)
    Return true if successful, false if a memory allocation error
    or disk read error occurs. */
 static bool
+//load_segment (struct file *file, off_t ofs, uint8_t *upage,
+  //            uint32_t read_bytes, uint32_t zero_bytes, bool writable) 
 load_segment (struct file *file, off_t ofs, uint8_t *upage,
-              uint32_t read_bytes, uint32_t zero_bytes, bool writable) 
+		uint32_t read_bytes, uint32_t zero_bytes, bool writable,
+		const char *file_name) 
 {
   ASSERT ((read_bytes + zero_bytes) % PGSIZE == 0);
   ASSERT (pg_ofs (upage) == 0);
   ASSERT (ofs % PGSIZE == 0);
 
   file_seek (file, ofs);
+
+  // total offset 
+  off_t offset = ofs;
+
   while (read_bytes > 0 || zero_bytes > 0) 
     {
+// this load_segment's while loop may run for more than one time as ASSERT says
+// ( read_bytes + zero_bytes ) % PGSIZE == 0
+
       /* Calculate how to fill this page.
          We will read PAGE_READ_BYTES bytes from FILE
          and zero the final PAGE_ZERO_BYTES bytes. */
@@ -578,28 +601,64 @@ load_segment (struct file *file, off_t ofs, uint8_t *upage,
       size_t page_zero_bytes = PGSIZE - page_read_bytes;
 
       /* Get a page of memory. */
+
+// do not ask for a page here, instead just let a page fault occur
+// but add entry corresponding to the page in supplemental PT
 //      uint8_t *kpage = palloc_get_page (PAL_USER);
-      uint8_t *kpage = allocator_get_page ();
+
+// 1
+/*      uint8_t *kpage = allocator_get_page ();
 
       if (kpage == NULL)
         return false;
-
+*/
+// No page is allocated, so you cann't read
       /* Load this page. */
-      if (file_read (file, kpage, page_read_bytes) != (int) page_read_bytes)
+// 2
+/*      if (file_read (file, kpage, page_read_bytes) != (int) page_read_bytes)
         {
           //palloc_free_page (kpage);
           allocator_free_page (kpage);
           return false; 
         }
       memset (kpage + page_read_bytes, 0, page_zero_bytes);
-
+*/
       /* Add the page to the process's address space. */
-      if (!install_page (upage, kpage, writable)) 
+// 3
+  /*    if (!install_page (upage, kpage, writable)) 
         {
           //palloc_free_page (kpage);
           allocator_free_page (kpage);
           return false; 
         }
+
+      // adding the page entry to supplemental page table
+      else {
+       // uint32_t *pte = lookup_page (thread_current ()->pagedir, upage, false);
+        uint32_t *pte = pagedir_search_page (thread_current ()->pagedir, upage);
+	ASSERT (pte);
+
+	// update supplemental page table
+	supplementary_insert (pte, kpage, file_name, offset, page_read_bytes, IN_FILE);
+
+	// update frame table
+	allocator_insert_pte (kpage, pte);
+
+	// increment the page offset
+	offset += page_read_bytes;
+      }
+*/
+      // add the entry for this virtual page in supplemental page
+      // ALL_ZERO page
+      if (page_read_bytes == 0)
+        supplementary_insert (upage, file_name, offset, page_read_bytes, writable, ALL_ZERO);
+
+       // need to read from FILE
+      else 
+        supplementary_insert (upage, file_name, offset, page_read_bytes, writable, IN_FILE);
+
+      // increment the page offset
+      offset += page_read_bytes;
 
       /* Advance. */
       read_bytes -= page_read_bytes;
@@ -624,14 +683,37 @@ setup_stack (void **esp)
   if (kpage != NULL) 
     {
       success = install_page (((uint8_t *) PHYS_BASE) - PGSIZE, kpage, true);
-      if (success)
+      if (success) {
         *esp = PHYS_BASE;
+	// adding the page to the supplemental page table
+	uint8_t *upage = (uint8_t *)PHYS_BASE - PGSIZE;
+	//uint32_t *pte = lookup_page (thread_current ()->pagedir, upage, false);
+        uint32_t *pte = pagedir_search_page (thread_current ()->pagedir, upage) ;
+
+	ASSERT (pte);
+
+	// update supplemental page table
+	// writable true
+//	printf ("Stack page %p\n",upage);
+
+	supplementary_insert (upage, "", 0, 0, true, ALL_ZERO);
+        supplementary_insert_kpage (upage, kpage);
+
+	// update frame table
+	allocator_insert_pte (kpage, pte);
+
+       struct thread *t = thread_current ();
+	// cannot go beyond this memory location
+       t->user_stack_limit = upage;
+      }
       else
         allocator_free_page (kpage);
         //palloc_free_page (kpage);
     }
   return success;
 }
+
+
 
 /* Adds a mapping from user virtual address UPAGE to kernel
    virtual address KPAGE to the page table.
@@ -642,7 +724,8 @@ setup_stack (void **esp)
    with palloc_get_page().
    Returns true on success, false if UPAGE is already mapped or
    if memory allocation fails. */
-static bool
+//static bool
+bool
 install_page (void *upage, void *kpage, bool writable)
 {
   struct thread *t = thread_current ();

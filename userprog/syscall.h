@@ -11,6 +11,9 @@ void exit_handler (int);
 int open_handler (const char *);
 
 // lock for accessing the filesys code
-static struct lock filesys_lock;
+//static struct lock filesys_lock;
+struct lock filesys_lock;
+
+bool stack_check (uint8_t *);
 
 #endif /* userprog/syscall.h */

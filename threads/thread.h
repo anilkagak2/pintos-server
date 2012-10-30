@@ -3,6 +3,7 @@
 
 #include <debug.h>
 #include <list.h>
+#include <hash.h>
 #include <stdint.h>
 
 #include "synch.h"
@@ -132,6 +133,9 @@ struct thread
     struct list fd_list;		/* List of file descriptors of thread. */
     int fd_to_allot;			/* File descriptor number to be allotted. */
     //struct thread *waiting_on_child;	/* Child for which the thread is waiting. */
+
+    struct hash supplement_pt;		/* Supplementary Page Table. */
+    uint8_t *user_stack_limit;		/* Till this the user stack can be accessed without growing. */
 #endif
 
     /* Owned by thread.c. */

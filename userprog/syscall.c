@@ -7,6 +7,8 @@
 #include "threads/thread.h"
 #include "threads/vaddr.h"
 
+#include "threads/palloc.h"
+
 static void syscall_handler (struct intr_frame *);
 //void check_pointer (void *ptr);
 
@@ -31,12 +33,128 @@ bool is_ptr_valid (void *ptr)
   else if (!is_user_vaddr (ptr)) return false;
   else if (!pagedir_get_page (thread_current ()->pagedir, ptr)) return false;
   else return true;
+
+/*  else {
+    // if page mapping is absent in page directory
+    // you need to allocate a page for this & create a mapping for it
+    if (!pagedir_get_page (thread_current ()->pagedir, ptr)) {
+	uint8_t *kpage = allocator_get_page ();
+
+	if (kpage == NULL)
+		exit_handler (-1);
+
+	memset (kpage, 0, PGSIZE);
+	uint8_t *upage = pg_round_down (ptr); */
+
+	/* Add the page to the process's address space. */
+/*	if (!install_page (upage, kpage, true)) 
+	{
+		allocator_free_page (kpage);
+		exit_handler (-1);
+	}
+
+	// adding the page entry to supplemental page table
+	else {
+		uint32_t *pte = pagedir_search_page (thread_current ()->pagedir, upage);
+		ASSERT (pte);
+
+		// update supplemental page table
+		supplementary_insert_kpage (upage, kpage);
+
+		// update frame table
+		allocator_insert_pte (kpage, pte);
+	}
+    }
+
+    return true;
+  } */
+}
+
+bool
+allocate_zeroed_page (void *upage) {
+	uint8_t *kpage = allocator_get_page ();
+
+	if (kpage == NULL)
+		return false;
+
+	memset (kpage, 0, PGSIZE);
+
+	/* Add the page to the process's address space. */
+	if (!install_page (upage, kpage, true)) 
+	{
+		allocator_free_page (kpage);
+		return false;
+	}
+
+	// adding the page entry to supplemental page table
+	else {
+		uint32_t *pte = pagedir_search_page (thread_current ()->pagedir, upage);
+		ASSERT (pte);
+
+		// update supplemental page table
+		supplementary_insert (upage, "", 0, 0, true, ALL_ZERO);
+		supplementary_insert_kpage (upage, kpage);
+
+		// update frame table
+		allocator_insert_pte (kpage, pte);
+	}
+	return true;
+}
+
+// checks the validity of user provided buffer in read syscall
+bool is_buffer_valid (void *ptr)
+{
+  if (ptr == NULL) return false;
+  else if (!is_user_vaddr (ptr)) return false;
+
+  else {
+    // if page mapping is absent in page directory
+    // you need to allocate a page for this & create a mapping for it
+    if (!pagedir_get_page (thread_current ()->pagedir, ptr)) {
+/*	if (!allocate_zeroed_page (pg_round_down (ptr)))
+		exit_handler (-1); */
+	return false;
+    } 
+
+    return true;
+  }
 }
 
 void check_pointer (void *ptr)
 {
   if (!is_ptr_valid (ptr)) {
      exit_handler (-1);
+  }
+}
+
+bool
+stack_check (uint8_t *esp)
+{
+  if (!esp) return false;
+  else if (!is_user_vaddr (esp)) return false;
+  else {
+    struct thread *cur = thread_current ();
+    uint8_t *limit = cur->user_stack_limit;
+
+//  printf ("user stack limit is %p & accessed esp is %p\n",limit,esp);
+    // if esp lies between limit - 32 & limit, then allocate new stack page
+    if (esp <= limit && esp >= limit - 32) {
+      uint8_t *upage;
+
+      if (esp == limit) upage = esp - PGSIZE;
+      else upage = pg_round_down (esp);
+
+      if (!allocate_zeroed_page (upage)) {
+//	printf ("Cannot allocate stack page %p\n", upage);
+        return false;
+      }
+
+      else {
+//	printf (" allocated stack page %p\n", upage);
+        cur->user_stack_limit = upage;
+	return true;
+      }
+    }
   }
 }
 
@@ -53,6 +171,10 @@ syscall_handler (struct intr_frame *f)
 
   // get the struct thread for calling process
   struct thread *t = thread_current ();
+
+  // check the user stack growth possibility
+  if (!stack_check ( (uint8_t *) user_esp))
+    exit_handler;
 
   uint32_t syscall_no = *user_esp;
 
@@ -196,11 +318,42 @@ syscall_handler (struct intr_frame *f)
 		user_esp++;
 
 		// check the validity of the user pointer
-		check_pointer (buffer);
+	//	check_pointer (buffer);
+		// if buffer pointer is not valid
 
 		check_pointer (user_esp);
 		unsigned size = *user_esp;
 		user_esp++;
+
+//	printf ("Reading to this address %p, last address %p page down %p , page up %p & the size is %d\n",buffer, buffer + size,pg_round_down (buffer), pg_round_up (buffer),size);
+		//if (!is_buffer_valid (buffer)) exit_handler (-1);
+		if (!is_buffer_valid (buffer + size)) exit_handler (-1);
+
+		// currently allowing reading across two pages, one is mapped
+		if (!is_buffer_valid (buffer)) {	
+	int available_size = (buffer + size) - (char *)pg_round_down (buffer+size);
+	if (available_size <=  PGSIZE) {
+		if (!allocate_zeroed_page (pg_round_down (buffer))) exit_handler (-1); }
+
+	else exit_handler (-1);
+		}
+
+		// buffer + size is valid then allocate memory for it
+/*		if (!is_buffer_valid (buffer)) {
+		  int left_bytes = size;
+		  while ( left_bytes > 0) {
+	//	pg_round_down (buffer + left_bytes) pg_round_down (buffer) 
+	int available_size = (buffer + left_bytes) - (char *)pg_round_down (buffer + left_bytes);
+	left_bytes -= available_size;
+	if (!is_buffer_valid (buffer + left_bytes))
+		allocate_zeroed_page (pg_round_down (buffer + left_bytes));
+	
+//		    if (left_bytes > PGSIZE)
+//		      left_byes -= PGSIZE;
+
+//		    allocate_zeroed_page (pg_round_down (buffer + left_bytes)); 
+ 		  }
+		} */
 
 		struct file *fp = search_fd_list (fd);
 		if (!fp) {
@@ -209,7 +362,12 @@ syscall_handler (struct intr_frame *f)
 
 		else {
 			lock_acquire (&filesys_lock);
+
 			f->eax = file_read (fp, buffer,size);
+			/*while ()
+			int bytes_read = file_read ();
+			f->eax = file_read (fp, buffer,size); */
+
 			lock_release (&filesys_lock);
 		}
 	}
