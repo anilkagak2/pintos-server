@@ -15,6 +15,8 @@
 #include "userprog/process.h"
 #endif
 
+#include "devices/timer.h"
+
 /* Random value for struct thread's `magic' member.
    Used to detect stack overflow.  See the big comment at the top
    of thread.h for details. */
@@ -632,7 +634,7 @@ init_thread (struct thread *t, const char *name, int priority)
    Also check for the magic number of the threads. */
 bool less_priority (const struct list_elem *a,
 		    const struct list_elem *b,
-		    void *aux)
+		    void *aux UNUSED)
 {
 	struct thread *t1 =  list_entry (a, struct thread, elem);
 	struct thread *t2 =  list_entry (b, struct thread, elem);
@@ -648,7 +650,7 @@ bool less_priority (const struct list_elem *a,
    When finding the maximum element this function is used. */
 bool more_priority (const struct list_elem *a,
 		    const struct list_elem *b,
-		    void *aux)
+		    void *aux UNUSED)
 {
 	struct thread *t1 =  list_entry (a, struct thread, elem);
 	struct thread *t2 =  list_entry (b, struct thread, elem);
@@ -663,7 +665,7 @@ bool more_priority (const struct list_elem *a,
 bool
 less_sleep_time (const struct list_elem *a,
 		 const struct list_elem *b,
-		 void *aux)
+		 void *aux UNUSED)
 {
 	struct thread *t1 =  list_entry (a, struct thread, elem);
 	struct thread *t2 =  list_entry (b, struct thread, elem);

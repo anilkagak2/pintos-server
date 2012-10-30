@@ -8,7 +8,7 @@
 
 #include "synch.h"
 
-#include <filesystem/file.h>
+#include <filesys/file.h>
 
 /* States in a thread's life cycle. */
 enum thread_status
@@ -136,6 +136,12 @@ struct thread
 
     struct hash supplement_pt;		/* Supplementary Page Table. */
     uint8_t *user_stack_limit;		/* Till this the user stack can be accessed without growing. */
+    //size_t num_stack_pages_left;	/* Number of stack pages which can be allocated
+//					   (Limit is 32 = 128KB stack size). */
+    int num_stack_pages_left;		/* Number of stack pages which can be allocated
+					   (Limit is 32 = 128KB stack size). */
+
+
 #endif
 
     /* Owned by thread.c. */

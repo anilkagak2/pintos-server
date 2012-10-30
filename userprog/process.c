@@ -688,23 +688,26 @@ setup_stack (void **esp)
 	// adding the page to the supplemental page table
 	uint8_t *upage = (uint8_t *)PHYS_BASE - PGSIZE;
 	//uint32_t *pte = lookup_page (thread_current ()->pagedir, upage, false);
-        uint32_t *pte = pagedir_search_page (thread_current ()->pagedir, upage) ;
+      /*  uint32_t *pte = pagedir_search_page (thread_current ()->pagedir, upage) ;
 
-	ASSERT (pte);
+	ASSERT (pte); */
 
 	// update supplemental page table
 	// writable true
-//	printf ("Stack page %p\n",upage);
+//	printf ("Stack page %p kpage is %p\n",upage,kpage);
 
 	supplementary_insert (upage, "", 0, 0, true, ALL_ZERO);
         supplementary_insert_kpage (upage, kpage);
 
 	// update frame table
-	allocator_insert_pte (kpage, pte);
+//	allocator_insert_pte (kpage, pte);
+	allocator_insert_upage (kpage, upage);
 
-       struct thread *t = thread_current ();
+        struct thread *t = thread_current ();
 	// cannot go beyond this memory location
-       t->user_stack_limit = upage;
+        t->user_stack_limit = upage;
+	// maximum number of stack pages left to be allocated to this process
+        t->num_stack_pages_left = 31;  // 1 is allocated here
       }
       else
         allocator_free_page (kpage);

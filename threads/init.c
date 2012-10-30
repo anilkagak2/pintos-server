@@ -122,11 +122,16 @@ main (void)
   /* Initialize the user Frame Table. */
   allocator_init ();
 
+  /* Initialize the swap table. */
+  swap_init ();
+
   printf ("Boot complete.\n");
   
   /* Run actions specified on kernel command line. */
   run_actions (argv);
 
+  /* Call the destructors for the frame table & swap table. */
+  swap_exit ();
   allocator_exit ();
 
   /* Finish up. */

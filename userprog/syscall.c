@@ -7,10 +7,13 @@
 #include "threads/thread.h"
 #include "threads/vaddr.h"
 
+#include "filesys/file.h"
+#include "filesys/filesys.h"
 #include "threads/palloc.h"
+#include "pagedir.h"
+#include "process.h"
 
 static void syscall_handler (struct intr_frame *);
-//void check_pointer (void *ptr);
 
 void exit_handler (int ret_value);
 int open_handler (const char *file);
@@ -33,41 +36,6 @@ bool is_ptr_valid (void *ptr)
   else if (!is_user_vaddr (ptr)) return false;
   else if (!pagedir_get_page (thread_current ()->pagedir, ptr)) return false;
   else return true;
-
-/*  else {
-    // if page mapping is absent in page directory
-    // you need to allocate a page for this & create a mapping for it
-    if (!pagedir_get_page (thread_current ()->pagedir, ptr)) {
-	uint8_t *kpage = allocator_get_page ();
-
-	if (kpage == NULL)
-		exit_handler (-1);
-
-	memset (kpage, 0, PGSIZE);
-	uint8_t *upage = pg_round_down (ptr); */
-
-	/* Add the page to the process's address space. */
-/*	if (!install_page (upage, kpage, true)) 
-	{
-		allocator_free_page (kpage);
-		exit_handler (-1);
-	}
-
-	// adding the page entry to supplemental page table
-	else {
-		uint32_t *pte = pagedir_search_page (thread_current ()->pagedir, upage);
-		ASSERT (pte);
-
-		// update supplemental page table
-		supplementary_insert_kpage (upage, kpage);
-
-		// update frame table
-		allocator_insert_pte (kpage, pte);
-	}
-    }
-
-    return true;
-  } */
 }
 
 bool
@@ -88,15 +56,13 @@ allocate_zeroed_page (void *upage) {
 
 	// adding the page entry to supplemental page table
 	else {
-		uint32_t *pte = pagedir_search_page (thread_current ()->pagedir, upage);
-		ASSERT (pte);
-
 		// update supplemental page table
+//printf ("allocating upage %p at kpage %p\n",upage, kpage);
 		supplementary_insert (upage, "", 0, 0, true, ALL_ZERO);
 		supplementary_insert_kpage (upage, kpage);
 
 		// update frame table
-		allocator_insert_pte (kpage, pte);
+		allocator_insert_upage (kpage, upage);
 	}
 	return true;
 }
@@ -116,7 +82,10 @@ bool is_buffer_valid (void *ptr)
 	return false;
     } 
 
-    return true;
+    struct page *p = supplementary_lookup (thread_current (), pg_round_down (ptr));
+    if (!p) return false;	// should be ASSERT
+    else if (!p->writable) return false;
+    else return true;
   }
 }
 
@@ -127,6 +96,8 @@ void check_pointer (void *ptr)
   }
 }
 
+// Maximum stack pages which can be allocated to a process is 32
+// i.e. 128 KB stack size
 bool
 stack_check (uint8_t *esp)
 {
@@ -135,26 +106,36 @@ stack_check (uint8_t *esp)
   else {
     struct thread *cur = thread_current ();
     uint8_t *limit = cur->user_stack_limit;
+    //size_t pages_left = cur->num_stack_pages_left;
+    int pages_left = cur->num_stack_pages_left;
 
-//  printf ("user stack limit is %p & accessed esp is %p\n",limit,esp);
-    // if esp lies between limit - 32 & limit, then allocate new stack page
-    if (esp <= limit && esp >= limit - 32) {
+   ASSERT (pages_left <= 31 && pages_left >= 0);
+
+ // printf ("user stack limit is %p & accessed esp is %p\n",limit,esp);
+    if (esp <= limit && esp >= limit - pages_left * PGSIZE) {
+// from limit onwards till pg_round_down (esp) you have to allocate the pages
       uint8_t *upage;
 
       if (esp == limit) upage = esp - PGSIZE;
       else upage = pg_round_down (esp);
 
-      if (!allocate_zeroed_page (upage)) {
-//	printf ("Cannot allocate stack page %p\n", upage);
-        return false;
+      int num_pages_to_allocate = (limit - upage) / PGSIZE;
+//printf ("num_pages_to_allocate %d\n", num_pages_to_allocate);
+
+      int i;
+      for (i=0; i < num_pages_to_allocate; i++) {
+        if (!allocate_zeroed_page (upage + i * PGSIZE)) {
+  //	printf ("Cannot allocate stack page %p\n", upage);
+          return false;
+        }
       }
 
-      else {
-//	printf (" allocated stack page %p\n", upage);
+	cur->num_stack_pages_left -= num_pages_to_allocate;
         cur->user_stack_limit = upage;
+//	printf (" allocated stack page %p stack pages left %d\n", upage, cur->num_stack_pages_left);
 	return true;
-      }
     }
+    return false;
   }
 }
 
@@ -164,6 +145,12 @@ syscall_handler (struct intr_frame *f)
   uint32_t *user_esp = f->esp;
   size_t size_int = sizeof (int *);
 
+  // check the user stack growth possibility
+//  if (!stack_check ( (uint8_t *) user_esp))
+   // exit_handler (-3);
+
+  stack_check ((uint8_t *) user_esp);
+
   // check for the validity of the Stack Pointer
   // before calling anything because the thread_current ()
   // rounds down the value of esp to guess the struct thread *
@@ -171,10 +158,6 @@ syscall_handler (struct intr_frame *f)
 
   // get the struct thread for calling process
   struct thread *t = thread_current ();
-
-  // check the user stack growth possibility
-  if (!stack_check ( (uint8_t *) user_esp))
-    exit_handler;
 
   uint32_t syscall_no = *user_esp;
 

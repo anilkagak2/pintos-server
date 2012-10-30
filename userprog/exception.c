@@ -153,10 +153,27 @@ page_fault (struct intr_frame *f)
   user = (f->error_code & PF_U) != 0;
 
 // was the fault caused because of stack access past the limit?
-  uint8_t *limit = thread_current ()->user_stack_limit;
+  struct thread *cur = thread_current ();
+  uint8_t *limit = cur->user_stack_limit;
+  size_t pages_left = cur->num_stack_pages_left;
+
+  ASSERT (pages_left <= 31 && pages_left >= 0);
+
+//  printf ("fault address %p thread %s limit is %p\n", fault_addr, thread_current ()->name,limit);
 //  if (fault_addr <= limit && fault_addr >= limit - 32) {
 // PUSH(4) & PUSHA (32)
-  if (fault_addr == f->esp - 4 ||  fault_addr == f->esp - 32) {
+//  if (f->esp <= limit && f->esp >= limit - 32)
+
+  //if (f->esp <= limit && f->esp >= limit -PGSIZE) {
+  if (f->esp <= limit && f->esp >= limit - pages_left * PGSIZE) {
+    if (!stack_check (f->esp)) {
+       exit_handler (-1);
+    }
+
+   return;
+  }
+  //if (fault_addr == f->esp - 4 ||  fault_addr == f->esp - 32) {
+  if (fault_addr <= f->esp - 4 &&  fault_addr >= f->esp - 32) {
 //  if (fault_addr <= limit && fault_addr >= limit - PGSIZE) {
     if (!stack_check (f->esp)) {
       exit_handler (-1);
@@ -170,14 +187,25 @@ page_fault (struct intr_frame *f)
   // referenced, will be implemented in Virtual Memory
   if (user) {
 
+//    if(fault_addr == PHYS_BASE) return;
+/*    if (f->esp == PHYS_BASE) {
+      f->esp = PHYS_BASE - 1;
+      return;
+    }  */
+
+   if (!is_user_vaddr (fault_addr)) {
+     printf ("fault address is %p & esp is %p & phys_base is %p\n",fault_addr,f->esp,PHYS_BASE);
+      exit_handler (-1);
+   }
+
 //    struct page *p = supplementary_lookup (fault_addr);
 // convert the fault_addr to a page
 //    printf ("fault address %p \n", fault_addr);
-    struct page *p = supplementary_lookup (pg_round_down (fault_addr));
+    struct page *p = supplementary_lookup (thread_current (), pg_round_down (fault_addr));
 
     // invalid access
     if (!p) {
-      printf ("Invalid address is %p & esp is %p\n & thread name is %s",fault_addr,f->esp,thread_current ()->name);
+      printf ("fault address is %p & esp is %p & thread name is %s\n",fault_addr,f->esp,thread_current ()->name);
       exit_handler (-1);
     }
 
@@ -188,10 +216,12 @@ page_fault (struct intr_frame *f)
     // need to get a free frame for allocating to this page
     switch (p->page_type) {
 	case IN_MEMORY:
-		printf ("No done yet\n");
+		allocator_dummy ();
+		printf ("Not done yet\n");
 		break;
 
 	case IN_FILE: {
+ASSERT (!p->is_present);
 		lock_acquire (&filesys_lock);
 		struct file *f = filesys_open (p->file_name);
 
@@ -199,10 +229,11 @@ page_fault (struct intr_frame *f)
 
 		uint8_t *kpage = allocator_get_page ();
 
-// cannot allocate memory
 		if (kpage == NULL) {
 			lock_release (&filesys_lock);
-			exit_handler (-1);
+			file_close (f);
+			//exit_handler (-1);
+			exit_handler (-2);
 		}
 
 		int page_read_bytes = p->read_bytes;
@@ -212,30 +243,31 @@ page_fault (struct intr_frame *f)
 			allocator_free_page (kpage);
 			lock_release (&filesys_lock);
 			file_close (f);
-			exit_handler (-1);
+			//exit_handler (-1);
+			exit_handler (-2);
 		}
 
 		memset (kpage + page_read_bytes, 0, PGSIZE - page_read_bytes);
 
 		/* Add the page to the process's address space. */
-		if (!install_page (upage, kpage, p->writeable)) 
+		if (!install_page (upage, kpage, p->writable)) 
 		{
 			allocator_free_page (kpage);
 			lock_release (&filesys_lock);
 			file_close (f);
-			exit_handler (-1);
+			//exit_handler (-1);
+			exit_handler (-2);
 		}
 
 		// adding the page entry to supplemental page table
 		else {
-			uint32_t *pte = pagedir_search_page (thread_current ()->pagedir, upage);
-			ASSERT (pte);
-
 			// update supplemental page table
-			supplementary_insert_kpage (upage, kpage);
+			//supplementary_insert_kpage (upage, kpage);
+			p->kpage = kpage;
+			p->is_present = true;
 
 			// update frame table
-			allocator_insert_pte (kpage, pte);
+			allocator_insert_upage (kpage, upage);
 		}
 
 		file_close (f);
@@ -243,34 +275,67 @@ page_fault (struct intr_frame *f)
 		break;
 	}
 
-	case IN_SWAP:
+	case IN_SWAP: {
+printf ("In swap slot\n");
+ASSERT (!p->is_present);
+		// read the page from swap after getting a free frame
+		uint8_t *kpage = allocator_get_page ();
+
+		if (kpage == NULL) {
+			//exit_handler (-1);
+			exit_handler (-4);
+		}
+		
+		memset (kpage, 0, PGSIZE);
+
+//		pagedir_set_page (thread_current ()->pagedir, upage, kpage, p->writable);
+		/* Add the page to the process's address space. */
+		if (!install_page (upage, kpage, p->writable)) 
+		{
+			allocator_free_page (kpage);
+			//exit_handler (-1);
+			exit_handler (-4);
+		}
+
+		p->kpage = kpage;
+		p->is_present = true;
+
+		// update frame table
+		allocator_insert_upage (kpage, upage);
+
+		// read from the swap slot & free the swap slot
+		//swap_read_and_free (p->sector, kpage);
+		swap_read_and_free (p->sector, upage);
+
+		p->sector = SECTOR_ERROR;
+		p->page_type = IN_MEMORY;
 		break;
+	}
 
 	case ALL_ZERO: {
 		uint8_t *kpage = allocator_get_page ();
 
 		if (kpage == NULL)
-			exit_handler (-1);
+			//exit_handler (-1);
+			exit_handler (-3);
 
 		memset (kpage, 0, PGSIZE);
 
 		/* Add the page to the process's address space. */
-		if (!install_page (upage, kpage, p->writeable)) 
+		if (!install_page (upage, kpage, p->writable)) 
 		{
 			allocator_free_page (kpage);
-			exit_handler (-1);
+			//exit_handler (-1);
+			exit_handler (-3);
 		}
 
 		// adding the page entry to supplemental page table
 		else {
-			uint32_t *pte = pagedir_search_page (thread_current ()->pagedir, upage);
-			ASSERT (pte);
-
 			// update supplemental page table
 			supplementary_insert_kpage (upage, kpage);
 
 			// update frame table
-			allocator_insert_pte (kpage, pte);
+			allocator_insert_upage (kpage, upage);
 		}
 		break;
 	}
@@ -278,11 +343,17 @@ page_fault (struct intr_frame *f)
 	default:
 		printf ("Not defined page type in page fault\n");
     }
+
+    // clear the accessed bit of the page
+    pagedir_set_accessed (thread_current ()->pagedir, upage, false);
   }
 
 // kernel page fault
-//  else
-//    kill (f);
+// should be a patch for pt-write-code2, need to some other hack for it
+  else {
+    printf ("kernel page fault: address %p\n", fault_addr);
+    exit_handler (-1);
+  }
 
   /* To implement virtual memory, delete the rest of the function
      body, and replace it with code that brings in the page to
