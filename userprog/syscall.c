@@ -2,14 +2,12 @@
 #include <stdio.h>
 #include <syscall-nr.h>
 #include <syscall.h>
-//#include "tests/lib.h"
 #include "threads/interrupt.h"
 #include "threads/thread.h"
 #include "threads/vaddr.h"
 
 #include "filesys/file.h"
 #include "filesys/filesys.h"
-//#include "threads/palloc.h"
 #include "threads/malloc.h"
 #include "pagedir.h"
 #include "process.h"
@@ -76,37 +74,29 @@ bool is_buffer_valid (void *ptr)
     // if page mapping is absent in page directory
     // you need to allocate a page for this & create a mapping for it
 
-  void *upage = pg_round_down (ptr);
-  struct thread *cur = thread_current ();
-  lock_acquire (&cur->supplement_lock);
-    struct page *p = supplementary_lookup (thread_current (), upage);
-  lock_release (&cur->supplement_lock);
+	  void *upage = pg_round_down (ptr);
+	  struct thread *cur = thread_current ();
+	  lock_acquire (&cur->supplement_lock);
+	    struct page *p = supplementary_lookup (thread_current (), upage);
+	  lock_release (&cur->supplement_lock);
 
-  // no such page exists in thread's supplementary table
-  if (!p) {
-//    printf ("upage %p doesn't exists in thread's supplementary table\n",upage);
-    exit_handler (-1);
-  }
+	  // no such page exists in thread's supplementary table
+	  if (!p) {
+	//    printf ("upage %p doesn't exists in thread's supplementary table\n",upage);
+	    exit_handler (-1);
+	  }
 
-  else if (p->kpage) {
-    // is the page writable??
-    if (p->writable) return true;
-    else return false;
-  }
+	  else if (p->kpage) {
+	    // is the page writable??
+	    if (p->writable) return true;
+	    else return false;
+	  }
 
-  else {
-    if (!allocate_zeroed_page (upage)) exit_handler (-1);
-    return true;
-  }
+	  else {
+	    if (!allocate_zeroed_page (upage)) exit_handler (-1);
+	    return true;
+	  }
 
-/*    if (!pagedir_get_page (thread_current ()->pagedir, ptr)) {
-	if (!allocate_zeroed_page (upage))
-		exit_handler (-1);
-//	printf ("no such page %p is mapped to pagedir: %p\n",ptr,thread_current ()->pagedir);
-//	return false;
-    }
-
-    return true; */
   }
 }
 
@@ -320,43 +310,22 @@ syscall_handler (struct intr_frame *f)
 		char *buffer = *user_esp;
 		user_esp++;
 
-		// check the validity of the user pointer
-	//	check_pointer (buffer);
-		// if buffer pointer is not valid
-
 		check_pointer (user_esp);
 		unsigned size = *user_esp;
 		user_esp++;
 
 //	printf ("Reading to this address %p, last address %p page down %p , page up %p & the size is %d\n",buffer, buffer + size,pg_round_down (buffer), pg_round_up (buffer),size);
-		//if (!is_buffer_valid (buffer)) exit_handler (-1);
 		if (!is_buffer_valid (buffer + size)) exit_handler (-1);
 
 		// currently allowing reading across two pages, one is mapped
 		if (!is_buffer_valid (buffer)) {	
-	int available_size = (buffer + size) - (char *)pg_round_down (buffer+size);
-	if (available_size <=  PGSIZE) {
-		if (!allocate_zeroed_page (pg_round_down (buffer))) exit_handler (-1); }
+			int available_size = (buffer + size) - (char *)pg_round_down (buffer+size);
+			if (available_size <=  PGSIZE) {
+				if (!allocate_zeroed_page (pg_round_down (buffer))) exit_handler (-1);
+			}
 
-	else exit_handler (-1);
+			else exit_handler (-1);
 		}
-
-		// buffer + size is valid then allocate memory for it
-/*		if (!is_buffer_valid (buffer)) {
-		  int left_bytes = size;
-		  while ( left_bytes > 0) {
-	//	pg_round_down (buffer + left_bytes) pg_round_down (buffer) 
-	int available_size = (buffer + left_bytes) - (char *)pg_round_down (buffer + left_bytes);
-	left_bytes -= available_size;
-	if (!is_buffer_valid (buffer + left_bytes))
-		allocate_zeroed_page (pg_round_down (buffer + left_bytes));
-	
-//		    if (left_bytes > PGSIZE)
-//		      left_byes -= PGSIZE;
-
-//		    allocate_zeroed_page (pg_round_down (buffer + left_bytes)); 
- 		  }
-		} */
 
 		struct file *fp = search_fd_list (fd);
 		if (!fp) {
@@ -365,12 +334,7 @@ syscall_handler (struct intr_frame *f)
 
 		else {
 			lock_acquire (&filesys_lock);
-
 			f->eax = file_read (fp, buffer,size);
-			/*while ()
-			int bytes_read = file_read ();
-			f->eax = file_read (fp, buffer,size); */
-
 			lock_release (&filesys_lock);
 		}
 	}

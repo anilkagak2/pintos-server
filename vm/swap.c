@@ -27,7 +27,6 @@ void swap_init ()
 // returns the start sector of the swap slot where upage is written
 // all the vacant swap slots are set to FALSE
 size_t
-//swap_write (void *upage)
 swap_write (void *kpage)
 {
 //  ASSERT (kpage);

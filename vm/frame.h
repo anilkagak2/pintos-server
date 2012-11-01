@@ -19,8 +19,6 @@ struct frame
 };
 
 void allocator_init (void);
-//void *allocator_get_page (void*);
-//void *allocator_get_page (void*, enum page_type_t);
 void *allocator_get_page (void*, enum page_type_t, bool writable);
 void *allocator_get_free_page (void*);
 void allocator_free_page (void *);

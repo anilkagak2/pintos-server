@@ -24,7 +24,6 @@
 
 static thread_func start_process NO_RETURN;
 bool load (const char *cmdline, void (**eip) (void), void **esp);
-//static bool load (const char *cmdline, void (**eip) (void), void **esp);
 static char ** cmd_token (char *cmdline, void *aux);
 
 /* Starts a new thread running a user program loaded from
@@ -130,18 +129,6 @@ start_process (void *kargv)
   struct semaphore *sema = (struct semaphore *)argv[argc];
   argv[argc] = NULL;
 
-/*  // open process's executable & call file_deny_write () on it
-  int fd_exe = open_handler (argv[0]);
-
-  // Accessing the filesys code, it's Critical Section
-//  lock_acquire (&filesys_lock);
-
-  if (fd_exe != -1) {
-    struct file *fp = search_fd_list (fd_exe);
-    file_deny_write (fp); 
-  }
-//  lock_release (&filesys_lock);
-*/
   success = load (argv[0], &if_.eip, &if_.esp);
 
   // open process's executable & call file_deny_write () on it
@@ -389,10 +376,6 @@ struct Elf32_Phdr
 
 static bool setup_stack (void **esp);
 static bool validate_segment (const struct Elf32_Phdr *, struct file *);
-/*static bool load_segment (struct file *file, off_t ofs, uint8_t *upage,
-                          uint32_t read_bytes, uint32_t zero_bytes,
-                          bool writable);*/ 
-//static bool load_segment (struct file *file, off_t ofs, uint8_t *upage,
 bool load_segment (struct file *file, off_t ofs, uint8_t *upage,
                           uint32_t read_bytes, uint32_t zero_bytes,
                           bool writable, const char *file_name); 
@@ -488,8 +471,6 @@ load (const char *file_name, void (**eip) (void), void **esp)
                   zero_bytes = ROUND_UP (page_offset + phdr.p_memsz, PGSIZE);
                 }
 
-   //           if (!load_segment (file, file_page, (void *) mem_page,
-     //                            read_bytes, zero_bytes, writable))
               if (!load_segment (file, file_page, (void *) mem_page,
                                  read_bytes, zero_bytes, writable, file_name))
                 goto done;
@@ -517,8 +498,6 @@ load (const char *file_name, void (**eip) (void), void **esp)
 }
 
 /* load() helpers. */
-
-//static bool install_page (void *upage, void *kpage, bool writable);
 
 /* Checks whether PHDR describes a valid, loadable segment in
    FILE and returns true if so, false otherwise. */
@@ -581,8 +560,6 @@ validate_segment (const struct Elf32_Phdr *phdr, struct file *file)
    or disk read error occurs. */
 //static bool
 bool
-//load_segment (struct file *file, off_t ofs, uint8_t *upage,
-  //            uint32_t read_bytes, uint32_t zero_bytes, bool writable) 
 load_segment (struct file *file, off_t ofs, uint8_t *upage,
 		uint32_t read_bytes, uint32_t zero_bytes, bool writable,
 		const char *file_name) 

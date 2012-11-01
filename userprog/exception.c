@@ -160,18 +160,11 @@ page_fault (struct intr_frame *f)
     exit_handler (-1);
   }
 
-/*  bool was_acquired = lock_held_by_current_thread (&filesys_lock);
-  if (was_acquired) {
-    printf ("Filesys lock held at the start of page fault by %d\n", thread_current ()->tid);
-    lock_release ("");
-  } */
-
 // was the fault caused because of stack access past the limit?
   struct thread *cur = thread_current ();
   uint8_t *limit = cur->user_stack_limit;
   size_t pages_left = cur->num_stack_pages_left;
 
-  //ASSERT (pages_left <= 31 && pages_left >= 0);
   ASSERT (pages_left <= 63 && pages_left >= 0);
 
 //  printf ("fault address %p thread %d limit is %p limit-pages_left %p\n", fault_addr, thread_current ()->tid,limit, limit - pages_left * PGSIZE);
@@ -198,7 +191,6 @@ page_fault (struct intr_frame *f)
   if (!is_user_vaddr (fault_addr)) {
 //     printf ("fault address is %p & esp is %p & phys_base is %p\n",fault_addr,f->esp,PHYS_BASE);
       exit_handler (-1);
-  //    exit_handler (-9);
   }
 
   if (is_frame_table_lock_acquired ()) {
@@ -219,121 +211,91 @@ page_fault (struct intr_frame *f)
     exit_handler (-1);
   }
 
-  // writing a read only page
-/*  if (!p->writable && write) {
-    printf ("Writing a read only page\n");
-    exit_handler (-1);
-  } */
-
   uint32_t *upage = p->upage;
 
-    // otherwise the page is in thread's page table but not in memory
-    // need to load it in memory
-    // need to get a free frame for allocating to this page
-    switch (p->page_type) {
-	case IN_MEMORY:
-		printf ("Not done yet\n");
-		break;
+  // otherwise the page is in thread's page table but not in memory
+  // need to load it in memory
+  // need to get a free frame for allocating to this page
+  switch (p->page_type) {
+    case IN_MEMORY:
+      printf ("Not done yet\n");
+      break;
 
-	case IN_FILE: {
-		uint8_t *kpage = allocator_get_page (upage, IN_FILE, p->writable);
-		if (kpage == NULL) {
-		//	exit_handler (-1);
-			exit_handler (-2);
-		}
+    case IN_FILE: {
+      uint8_t *kpage = allocator_get_page (upage, IN_FILE, p->writable);
+      if (kpage == NULL) {
+      	exit_handler (-1);
+      }
 
-		bool release_lock = false;
-		if (!lock_held_by_current_thread (&filesys_lock)) {
-		        release_lock = true;
-		        lock_acquire (&filesys_lock);
-		}
+      bool release_lock = false;
+      if (!lock_held_by_current_thread (&filesys_lock)) {
+        release_lock = true;
+        lock_acquire (&filesys_lock);
+      }
 
-		struct file *f = filesys_open (p->file_name);
- 		if (!f) {
-			allocator_free_page (kpage);
-			printf ("thread %d could not open the file %s in page fault\n", thread_current ()->tid, p->file_name);
-			// if you acquired the lock here then release it
-			if (release_lock)
-			        lock_release (&filesys_lock);
-
-		//	exit_handler (-1);
-			exit_handler (-2);
-		}
-
-		file_seek (f, p->file_ofs);
-
-		int page_read_bytes = p->read_bytes;
-		if (file_read (f, kpage, page_read_bytes) != (int) page_read_bytes)
-	        {
-			allocator_free_page (kpage);
-			file_close (f);
-
-			// if you acquired the lock here then release it
-			if (release_lock)
-			        lock_release (&filesys_lock);
-
-		//	exit_handler (-1);
-			exit_handler (-2);
-		}
-
-		memset (kpage + page_read_bytes, 0, PGSIZE - page_read_bytes);
-		file_close (f);
-
+      struct file *f = filesys_open (p->file_name);
+      if (!f) {
+	allocator_free_page (kpage);
+	printf ("thread %d could not open the file %s in page fault\n", thread_current ()->tid, p->file_name);
 		// if you acquired the lock here then release it
-		if (release_lock)
-		        lock_release (&filesys_lock);
-		break;
-	}
+	if (release_lock)
+	        lock_release (&filesys_lock);
 
-	case IN_SWAP: {
-//printf ("In swap slot\n");
-		// read the page from swap after getting a free frame
-		uint8_t *kpage = allocator_get_page (upage, IN_SWAP, p->writable);
+	exit_handler (-1);
+      }
 
-		if (kpage == NULL) {
-			//exit_handler (-1);
-			exit_handler (-4);
-		}
-		break;
-	}
+      file_seek (f, p->file_ofs);
 
-	case ALL_ZERO: {
-// ALL_ZERO_I is a dummy type to differ between suppelementary entries
-// which are available in table & which needs to be allocated space
-		uint8_t *kpage = allocator_get_page (upage, ALL_ZERO_I, p->writable);
+      int page_read_bytes = p->read_bytes;
+      if (file_read (f, kpage, page_read_bytes) != (int) page_read_bytes)
+      {
+	allocator_free_page (kpage);
+	file_close (f);
 
-		if (kpage == NULL) {
-			//exit_handler (-1);
-			exit_handler (-3);
-		}
-		break;
-	}
+	// if you acquired the lock here then release it
+	if (release_lock)
+	        lock_release (&filesys_lock);
 
-	default:
-		printf ("Not defined page type in page fault\n");
+	exit_handler (-1);
+      }
+
+      memset (kpage + page_read_bytes, 0, PGSIZE - page_read_bytes);
+      file_close (f);
+
+      // if you acquired the lock here then release it
+      if (release_lock)
+        lock_release (&filesys_lock);
+
+      break;
     }
 
-    // clear the accessed bit of the page
-    pagedir_set_accessed (thread_current ()->pagedir, upage, false);
-//    lock_release (&cur->supplement_lock);
-//  } 
+    case IN_SWAP: {
+      //printf ("In swap slot\n");
+      // read the page from swap after getting a free frame
+      uint8_t *kpage = allocator_get_page (upage, IN_SWAP, p->writable);
 
-// kernel page fault
-// should be a patch for pt-write-code2, need to some other hack for it
-/*  else {
-    printf ("kernel page fault: address %p\n", fault_addr);
-    //exit_handler (-1);
-    exit_handler (-10);
-  } */
+      if (kpage == NULL) {
+	exit_handler (-1);
+      }
+      break;
+    }
 
-  /* To implement virtual memory, delete the rest of the function
-     body, and replace it with code that brings in the page to
-     which fault_addr refers. */
-/*  printf ("Page fault at %p: %s error %s page in %s context.\n",
-          fault_addr,
-          not_present ? "not present" : "rights violation",
-          write ? "writing" : "reading",
-          user ? "user" : "kernel");
-  kill (f); */
+    case ALL_ZERO: {
+// ALL_ZERO_I is a dummy type to differ between suppelementary entries
+// which are available in table & which needs to be allocated space
+      uint8_t *kpage = allocator_get_page (upage, ALL_ZERO_I, p->writable);
+
+      if (kpage == NULL) {
+	exit_handler (-1);
+      }
+      break;
+    }
+
+    default:
+      printf ("Not defined page type in page fault\n");
+  }
+
+  // clear the accessed bit of the page
+  pagedir_set_accessed (thread_current ()->pagedir, upage, false);
 }
 

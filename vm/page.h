@@ -52,9 +52,7 @@ supplementary_insert_without_lock (void *upage, const char *file_name,
 				int32_t ofs,uint32_t read_bytes, bool writable,
 				enum page_type_t type);
 void supplementary_insert_zero_page (void *upage, void *kpage);
-
 struct page *supplementary_lookup (struct thread *t, void *upage);
-//bool supplementary_insert_kpage (void *upage, void *kpage);
 bool supplementary_insert_kpage (void *upage, void *kpage, enum page_type_t);
 
 #endif /* Page.h */

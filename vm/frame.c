@@ -302,8 +302,6 @@ allocator_insert_kpage_in_supplement_pt (void *upage, void *kpage, enum page_typ
    Be sure about clearing the accessed bits only after you make the distinction 
    between accessed & not accessed. */
 /* Now, upadating the frame table (upage too) with a single call. */
-//void *
-//allocator_get_page (void *upage) {
 void *
 allocator_get_page (void *upage, enum page_type_t page_type, bool writable) {
   // if free frames are available then allocate it
